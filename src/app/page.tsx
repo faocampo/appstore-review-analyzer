@@ -84,14 +84,21 @@ async function requestAnalysis(
   const body: unknown = await response.json();
 
   if (!response.ok) {
-    const message =
-      typeof body === "object" &&
-      body !== null &&
-      "error" in body &&
-      typeof body.error === "string"
-        ? body.error
-        : "The analysis could not be completed.";
-    throw new Error(message);
+    if (typeof body === "object" && body !== null) {
+      const summary =
+        "error" in body && typeof body.error === "string"
+          ? body.error
+          : "The analysis could not be completed.";
+      const details =
+        "details" in body &&
+        Array.isArray(body.details) &&
+        body.details.every((detail) => typeof detail === "string")
+          ? body.details.join(" ")
+          : "";
+      throw new Error(details ? `${summary} ${details}` : summary);
+    }
+
+    throw new Error("The analysis could not be completed.");
   }
 
   return body as AnalysisResult;
