@@ -1,0 +1,82 @@
+# Created by venv; see https://docs.python.org/3/library/venv.html
+# virtual python env
+.venv
+
+#tokens
+secret
+
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+
+# testing
+/coverage
+
+# production
+/build
+
+# local configuration
+.env
+.env.local
+.env.*.local
+
+# misc
+.DS_Store
+*.pem
+*.log
+.vercel
+*.tsbuildinfo
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+*.egg
+*.dist-info
+*.whl
+*.zip
+*.tar.gz
+*.tgz
+*.tar
+*.gz
+*.bz2
+*.xz
+*.rar
+*.7z
+*.exe
+*.dll
+*.so
+*.dylib
+*.lib
+*.a
+*.o
+*.obj
+*.pdb
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+*.egg
+*.dist-info
+*.whl
+*.zip
+*.tar.gz
+*.tgz
+*.tar
+*.gz
+*.bz2
+*.xz
+*.rar
+*.7z
+*.exe
+*.dll
+*.so
+*.dylib
+*.lib
+*.a
+*.o
+*.obj
+*.pdb
