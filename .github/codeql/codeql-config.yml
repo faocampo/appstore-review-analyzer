@@ -1,0 +1,8 @@
+name: ReviewSignal CodeQL configuration
+
+queries:
+  - uses: security-extended
+
+paths-ignore:
+  - "**/*.test.ts"
+
