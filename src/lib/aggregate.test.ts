@@ -78,4 +78,55 @@ describe("aggregateReviews", () => {
       }),
     ).toThrow("No written reviews");
   });
+
+  it("groups neutral reasons, limits latest reviews, and de-duplicates notices", () => {
+    const reviews = [
+      analyzed({
+        id: "newer",
+        store: "google_play",
+        platform: "android",
+        rating: 3,
+        title: "Fine",
+        body: "The content is fine.",
+        createdAt: "2026-09-30T23:59:59.999Z",
+        dateSemantics: "created_at",
+        source: "csv",
+      }),
+      analyzed({
+        id: "older",
+        store: "apple_app_store",
+        platform: "ios",
+        rating: 3,
+        title: "Fine",
+        body: "The content is fine.",
+        createdAt: "2026-09-01T00:00:00.000Z",
+        dateSemantics: "created_at",
+        source: "csv",
+      }),
+    ];
+
+    const result = aggregateReviews({
+      appName: "Test app",
+      sourceMode: "csv",
+      analysisMode: "mock",
+      model: "mock-rules-v1",
+      startDate: "2026-09-01",
+      endDate: "2026-09-30",
+      lastN: 1,
+      reviews,
+      notices: ["Duplicate", "Duplicate"],
+    });
+
+    expect(result.reviews.map((review) => review.id)).toEqual(["newer"]);
+    expect(result.reasons.neutral).toEqual([
+      expect.objectContaining({
+        reason: "content_quality",
+        count: 2,
+        share: 1,
+      }),
+    ]);
+    expect(result.notices.filter((notice) => notice === "Duplicate")).toHaveLength(
+      1,
+    );
+  });
 });

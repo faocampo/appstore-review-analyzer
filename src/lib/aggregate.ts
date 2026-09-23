@@ -41,7 +41,7 @@ function summarizeReasons(
       reason,
       label: REASON_DEFINITIONS[reason],
       count,
-      share: groupedReviews.length ? count / groupedReviews.length : 0,
+      share: count / groupedReviews.length,
     }))
     .sort((left, right) => right.count - left.count)
     .slice(0, 5);

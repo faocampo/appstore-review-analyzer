@@ -613,8 +613,12 @@ Run:
 npm run lint
 npm run typecheck
 npm test
+npm run test:coverage
 npm run build
 ```
+
+The coverage command enforces at least 90% branch, function, line, and
+statement coverage across the server and domain code.
 
 Start the production build with:
 

@@ -73,4 +73,98 @@ describe("classifyWithJev", () => {
       model: "jev-1.13.0",
     });
   });
+
+  it.each([undefined, "typesafe_api_key_placeholder"])(
+    "requires a configured TypeSafe key",
+    async (apiKey) => {
+      if (apiKey) vi.stubEnv("TYPESAFE_API_KEY", apiKey);
+      else vi.stubEnv("TYPESAFE_API_KEY", "");
+
+      await expect(classifyWithJev(review)).rejects.toThrow(
+        "TYPESAFE_API_KEY is not configured",
+      );
+    },
+  );
+
+  it("reports TypeSafe provider errors", async () => {
+    vi.stubEnv("TYPESAFE_API_KEY", "test-key");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("bad model", { status: 400 })),
+    );
+
+    await expect(classifyWithJev(review)).rejects.toThrow(
+      "TypeSafe System One returned 400: bad model",
+    );
+  });
+
+  it("supports array probabilities and falls back for unknown reasons", async () => {
+    vi.stubEnv("TYPESAFE_API_KEY", "test-key");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          answers: {
+            sentiment: {
+              score: 1.2,
+              confidence: 0.7,
+              probabilities: [0.1, 0.7, 0.2],
+            },
+            primary_reason: {
+              choice: "unsupported_reason",
+              confidence: 0.6,
+              probabilities: [0.2, 0.8],
+            },
+          },
+        }),
+      ),
+    );
+
+    await expect(classifyWithJev(review)).resolves.toMatchObject({
+      sentimentScore: 1,
+      sentimentLabel: "negative",
+      sentimentProbabilities: {
+        highly_negative: 0.1,
+        negative: 0.7,
+        neutral_mixed: 0.2,
+        positive: 0,
+        highly_positive: 0,
+      },
+      primaryReason: "other_unclear",
+      model: "jev-1.13.0",
+    });
+  });
+
+  it("accepts label-keyed sentiment probabilities", async () => {
+    vi.stubEnv("TYPESAFE_API_KEY", "test-key");
+    vi.stubEnv("TYPESAFE_MODEL", "custom-model");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          answers: {
+            sentiment: {
+              score: 2,
+              confidence: 0.5,
+              probabilities: {
+                neutral_mixed: 1,
+              },
+            },
+            primary_reason: {
+              choice: "ads",
+              confidence: 0.9,
+              probabilities: {
+                ads: 0.9,
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    const result = await classifyWithJev(review);
+    expect(result.sentimentProbabilities.neutral_mixed).toBe(1);
+    expect(result.primaryReason).toBe("ads");
+    expect(result.model).toBe("custom-model");
+  });
 });

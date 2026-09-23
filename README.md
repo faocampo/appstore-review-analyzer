@@ -158,10 +158,13 @@ The dashboard’s average rating is always labeled **written-review rating**. It
 npm run lint
 npm run typecheck
 npm test
+npm run test:coverage
 npm run build
 ```
 
-Unit tests cover deterministic period aggregation and CSV normalization.
+`npm run test:coverage` enforces at least 90% branch, function, line, and
+statement coverage across the server and domain code in `src/lib` and
+`src/app/api`.
 
 ## Architecture
 
