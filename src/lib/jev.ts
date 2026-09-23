@@ -19,7 +19,7 @@ const jevResponseSchema = z.object({
   model: z.string().optional(),
   answers: z.object({
     sentiment: z.object({
-      score: z.number().int().min(0).max(4),
+      score: z.number().min(0).max(4),
       probabilities: probabilitySchema,
       confidence: z.number().min(0).max(1),
     }),
@@ -126,7 +126,8 @@ export async function classifyWithJev(review: Review): Promise<Classification> {
   }
 
   const payload = jevResponseSchema.parse(await response.json());
-  const sentimentScore = payload.answers.sentiment.score as SentimentScore;
+  const sentimentExpectedValue = payload.answers.sentiment.score;
+  const sentimentScore = Math.round(sentimentExpectedValue) as SentimentScore;
   const probabilities = scoreProbabilities(
     payload.answers.sentiment.probabilities,
   );
@@ -138,10 +139,7 @@ export async function classifyWithJev(review: Review): Promise<Classification> {
   return {
     sentimentScore,
     sentimentLabel: SENTIMENT_LABELS[sentimentScore],
-    sentimentExpectedValue: SENTIMENT_LABELS.reduce(
-      (sum, label, index) => sum + probabilities[label] * index,
-      0,
-    ),
+    sentimentExpectedValue,
     sentimentProbabilities: probabilities,
     sentimentConfidence: payload.answers.sentiment.confidence,
     primaryReason,
