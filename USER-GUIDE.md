@@ -32,10 +32,18 @@ competitor apps.
   browser.
 - Review text, ratings, dates, store metadata, and classification results are
   returned to the browser and displayed in the latest-review table.
-- With `ANALYSIS_MODE=jev`, each written review is sent from the server to the
-  TypeSafe System One API for classification.
-- With `ANALYSIS_MODE=mock`, classification is performed locally with
+- With `CLASSIFIER_PROVIDER=openrouter`, reviews are sent from the server to
+  OpenRouter in batches. Requests always set `provider.data_collection: "deny"`
+  and, unless `OPENROUTER_ZDR=false`, route only to zero-data-retention
+  providers. Reviewer nicknames are never sent.
+- With `CLASSIFIER_PROVIDER=jev`, each written review is sent from the server
+  to the TypeSafe System One API for classification.
+- With `CLASSIFIER_PROVIDER=mock`, classification is performed locally with
   deterministic keyword and rating rules.
+- `/api/analyze` requires `Authorization: Bearer <ANALYZE_API_TOKEN>` when the
+  token is set, and refuses every request in production when it is not.
+- Store and classifier error bodies are logged on the server only; the browser
+  receives short, safe messages.
 - CSV content is uploaded to the application server when analysis is run.
 - Do not commit `.env.local`, service-account JSON, Apple `.p8` files, access
   tokens, or API keys. The repository ignores local environment files.
@@ -72,57 +80,85 @@ After changing an environment variable, restart the development server.
 For a credential-free first run, keep:
 
 ```dotenv
-ANALYSIS_MODE=mock
+CLASSIFIER_PROVIDER=mock
 ```
 
 The dashboard automatically loads the synthetic demo dataset.
 
 ## 5. Configuration reference
 
-The current MVP accepts short-lived store bearer tokens.
+Store credentials are minted on the server from long-lived keys. Static
+short-lived tokens remain as a manual fallback.
 
 | Variable | Required when | Description |
 | --- | --- | --- |
-| `ANALYSIS_MODE` | Always | `mock` for local deterministic classification or `jev` for TypeSafe classification. Any value other than `jev` is treated as `mock`. |
-| `TYPESAFE_API_KEY` | `ANALYSIS_MODE=jev` | TypeSafe API key sent as a bearer token to System One. |
+| `ANALYZE_API_TOKEN` | Production | Shared bearer token for `/api/analyze`. Interim access control until Loomit OIDC. |
+| `ANALYZE_RATE_LIMIT_PER_MINUTE` | Optional | Requests per client per minute. Defaults to `20`. |
+| `CLASSIFIER_PROVIDER` | Optional | `openrouter`, `jev` or `mock`. Defaults to `openrouter` in production and `mock` elsewhere. The legacy `ANALYSIS_MODE=jev\|mock` is still honored. |
+| `OPENROUTER_API_KEY` | OpenRouter selected | OpenRouter API key. |
+| `OPENROUTER_MODEL` | OpenRouter selected | Pinned model id. There is no default; changing it changes `classifier.model` in results. |
+| `OPENROUTER_BATCH_SIZE` | Optional | Reviews per request. Defaults to `20` (max `50`). |
+| `OPENROUTER_ZDR` | Optional | `false` disables zero-data-retention routing. Data collection is always denied. |
+| `TYPESAFE_API_KEY` | Jev selected | TypeSafe API key sent as a bearer token to System One. |
 | `TYPESAFE_MODEL` | Optional | Jev model identifier. Defaults to `jev-1.13.0`. |
-| `GOOGLE_PLAY_ACCESS_TOKEN` | Google Play API selected | Short-lived OAuth access token authorized for Android Publisher API access. |
-| `GOOGLE_PLAY_MAX_PAGES` | Optional | Google review pages to fetch. Defaults to `10`; the application caps it at `50`. Each page requests up to 100 reviews. |
-| `APPLE_APP_STORE_CONNECT_TOKEN` | App Store Connect API selected | Short-lived signed App Store Connect JWT. |
-| `APPLE_MAX_PAGES` | Optional | Apple review pages to fetch. Defaults to `10`; the application caps it at `50`. Each page requests up to 200 reviews. |
+| `CLASSIFIER_CONCURRENCY`, `CLASSIFIER_MAX_RETRIES`, `CLASSIFIER_TIMEOUT_MS` | Optional | Parallel classifier calls, retries for 429/5xx/invalid output, and per-call timeout. |
+| `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Google Play API selected (recommended) | Service-account JSON, raw or base64. Access tokens are minted and refreshed automatically. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Alternative | Path to a service-account key file. |
+| `GOOGLE_PLAY_ACCESS_TOKEN` | Fallback | Manually minted short-lived OAuth token. |
+| `GOOGLE_PLAY_MAX_PAGES` | Optional | Defaults to `10`; capped at `50`. Each page requests up to 100 reviews. |
+| `APPLE_ISSUER_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` | App Store Connect API selected (recommended) | API key material. The `.p8` PEM may use `\n` escapes or be base64-encoded. An ES256 JWT (15-minute TTL) is signed per request window. |
+| `APPLE_APP_STORE_CONNECT_TOKEN` | Fallback | Manually signed short-lived JWT. |
+| `APPLE_MAX_PAGES` | Optional | Defaults to `10`; capped at `50`. Each page requests up to 200 reviews. |
 
-Example Jev and live-store configuration:
+Example production configuration:
 
 ```dotenv
-ANALYSIS_MODE=jev
-TYPESAFE_API_KEY=replace_with_typesafe_key
-TYPESAFE_MODEL=jev-1.13.0
+ANALYZE_API_TOKEN=replace_with_a_long_random_token
+CLASSIFIER_PROVIDER=openrouter
+OPENROUTER_API_KEY=replace_with_openrouter_key
+OPENROUTER_MODEL=replace_with_pinned_model_id
 
-GOOGLE_PLAY_ACCESS_TOKEN=replace_with_short_lived_google_token
-GOOGLE_PLAY_MAX_PAGES=10
-
-APPLE_APP_STORE_CONNECT_TOKEN=replace_with_short_lived_apple_jwt
-APPLE_MAX_PAGES=10
+GOOGLE_PLAY_SERVICE_ACCOUNT_JSON=replace_with_base64_service_account_json
+APPLE_ISSUER_ID=replace_with_issuer_id
+APPLE_KEY_ID=replace_with_key_id
+APPLE_PRIVATE_KEY=replace_with_base64_p8
 ```
 
-Placeholders ending in `_placeholder` are rejected by the connectors.
+Placeholders ending in `_placeholder` are rejected.
 
-### Classification mode and data source are independent
+### Classifier and data source are independent
 
-- Demo data can use mock rules or Jev.
-- CSV data can use mock rules or Jev.
-- Live store data can use mock rules or Jev.
-- Store tokens are only needed for the official-store API source.
-- A TypeSafe key is only needed when `ANALYSIS_MODE=jev`.
+- Any data source (demo, CSV, live APIs) can use any classifier.
+- Store credentials are only needed for the official-store API source.
+- A classifier key is only needed for the selected classifier.
 
-## 6. TypeSafe / Jev setup
+## 6. Classifier setup
+
+### OpenRouter (production default)
+
+1. Create a dedicated OpenRouter API key for ReviewSignal and store it as
+   `OPENROUTER_API_KEY`.
+2. Choose and pin a model that supports structured outputs, and set
+   `OPENROUTER_MODEL` to its exact id. Re-run the evaluation set before
+   changing it: metrics are only comparable within one model and prompt
+   version.
+3. Confirm that the zero-data-retention routing and data-collection denial
+   meet your DPA before sending publisher data.
+4. Set `CLASSIFIER_PROVIDER=openrouter` and run a demo analysis first.
+
+Each request asks for a strict JSON schema with, per review, a sentiment score
+(0–4), a self-reported confidence, and one reason from the taxonomy. Reviews the
+model skips are retried; reviews that still fail are counted as unclassified
+and excluded from the metrics.
+
+### TypeSafe / Jev
 
 1. Sign in to the
    [TypeSafe API Keys console](https://console.typesafe.ai/keys).
 2. Create a dedicated API key for ReviewSignal.
 3. Copy the key into your secret manager or local `.env.local` as
    `TYPESAFE_API_KEY`.
-4. Set `ANALYSIS_MODE=jev`.
+4. Set `CLASSIFIER_PROVIDER=jev`.
 5. Keep `TYPESAFE_MODEL=jev-1.13.0`, or deliberately select another supported
    System One model.
 6. Restart the application and run a demo analysis before connecting store
@@ -184,13 +220,10 @@ https://www.googleapis.com/auth/androidpublisher
     still view ratings and reviews.
 14. Accept/save the invitation and allow permission changes time to propagate.
 
-Use the service-account credential with an OAuth library or trusted credential
-broker to mint a short-lived access token with the Android Publisher scope.
-Place that token in `GOOGLE_PLAY_ACCESS_TOKEN`.
-
-The current MVP does not yet read service-account JSON or rotate Google tokens
-automatically. A production deployment should add automatic token generation
-instead of manually replacing an expiring access token.
+Store the downloaded JSON in your secret manager and expose it as
+`GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` (raw JSON or base64), or mount it as a file
+and set `GOOGLE_APPLICATION_CREDENTIALS`. ReviewSignal mints and refreshes
+short-lived Android Publisher tokens automatically.
 
 ### Find the Android package name
 
@@ -210,11 +243,8 @@ References:
 
 ### Required values
 
-- Secret used by the current MVP: `APPLE_APP_STORE_CONNECT_TOKEN`
-- Key material used to generate that token:
-  - Issuer ID
-  - Key ID
-  - downloaded `.p8` private key
+- Secrets: `APPLE_ISSUER_ID`, `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY` (the
+  downloaded `.p8` private key)
 - Dashboard identifier: numeric App Store Connect Apple ID, for example
   `1234567890`
 
@@ -250,39 +280,16 @@ Team keys apply across all apps in the account. If that scope is too broad,
 create a dedicated App Store Connect user limited to the target apps and use an
 individual API key for that user.
 
-### Generate the short-lived JWT
+### Short-lived JWT generation
 
-Generate the JWT in trusted server-side tooling using ES256 and the downloaded
-private key.
+ReviewSignal signs the App Store Connect JWT on the server with ES256 from the
+three secrets above: `kid` is the Key ID, `iss` the Issuer ID, `aud`
+`appstoreconnect-v1`, and the token lives 15 minutes (Apple allows at most 20).
+It is cached and re-signed shortly before expiry.
 
-Header:
-
-```json
-{
-  "alg": "ES256",
-  "kid": "YOUR_KEY_ID",
-  "typ": "JWT"
-}
-```
-
-Payload:
-
-```json
-{
-  "iss": "YOUR_ISSUER_ID",
-  "iat": 1700000000,
-  "exp": 1700001200,
-  "aud": "appstoreconnect-v1"
-}
-```
-
-Use current Unix timestamps. Keep `exp` within Apple's allowed short lifetime;
-20 minutes is the standard maximum used by Apple's App Store Connect examples.
-Place the signed token in `APPLE_APP_STORE_CONNECT_TOKEN`.
-
-The current MVP does not yet generate Apple JWTs from Issuer ID, Key ID, and
-private-key secrets. A production deployment should generate a fresh JWT at
-request time rather than manually replacing an expired token.
+`APPLE_PRIVATE_KEY` accepts the PEM contents with real or `\n`-escaped
+newlines, or the base64 of the whole file. A manually signed token in
+`APPLE_APP_STORE_CONNECT_TOKEN` is still accepted as a fallback.
 
 ### Find the numeric Apple ID
 
@@ -415,12 +422,20 @@ Sentiment uses this ordered scale:
 | 3 | Positive |
 | 4 | Highly positive |
 
-For Jev, ReviewSignal calculates each review's expected sentiment from the full
-probability distribution, then averages those values:
+ReviewSignal computes each review's expected sentiment, then averages those
+values across the period:
 
-```text
-mean(sum(score × score_probability))
-```
+- when the classifier returns a valid five-level probability distribution
+  (the mock classifier, and Jev when its distribution is complete and sums to
+  1), the expected value is probability-weighted:
+  `sum(score × score_probability)`;
+- otherwise (OpenRouter, or an incomplete Jev distribution), it is the
+  classifier's own score.
+
+The estimator used is shown under the average sentiment and returned as
+`metrics.sentimentEstimator` (`probability_weighted`, `provider_score` or
+`mixed`). Compare averages only between runs that use the same estimator,
+model and prompt version (`classifier` in the response).
 
 The dashboard describes aggregate values using these ranges:
 
@@ -494,9 +509,16 @@ Example:
   "lastN": 20,
   "androidPackage": "com.company.product",
   "appleAppId": "1234567890",
-  "translationLanguage": "en"
 }
 ```
+
+Send `Authorization: Bearer <ANALYZE_API_TOKEN>` when the server has a token
+configured. `translationLanguage` is still accepted but ignored: reviews are
+classified in their original language.
+
+CSV files are sent as `{ "name", "platform", "encoding", "content" }`, where
+`encoding` is `"text"` (default) or `"base64"` (raw file bytes; required for
+UTF-16 Play Console reports).
 
 Input constraints:
 
@@ -506,7 +528,17 @@ Input constraints:
 - at least one store identifier for `live_api`;
 - at least one file for `csv`;
 - no more than six CSV file objects;
-- no more than 8,000,000 characters per CSV content field.
+- no more than 11,000,000 characters per CSV content field (about 8 MB of
+  file bytes in base64).
+
+Error statuses: `400` invalid input or JSON, `401` missing or wrong token,
+`422` no reviews in the period, `429` rate limited (see `Retry-After`), `502`
+store or classifier failure, `503` access control not configured in
+production, `500` unexpected internal error (details are in the server logs).
+
+The response includes `coverage[]` with one entry per source: `status`
+(`complete`, `partial`, `failed`), `reviewsFetched`, `pagesFetched`,
+`truncated`, `dateSemantics`, and an explanatory `note`.
 
 ## 13. Store limitations
 
@@ -519,14 +551,19 @@ Input constraints:
   complete historical review archive.
 - The API exposes a last-modified timestamp where a reliable original
   creation timestamp is unavailable. ReviewSignal marks and uses this fallback
-  as the review date for filtering and ordering.
+  as the review date for filtering and ordering, and reports it as
+  `period.membership`.
+- Periods that start more than about 7 days ago are reported as `partial`
+  coverage for the Google Play API source.
 - Historical review and ratings reports are separate export paths.
 
 ### App Store Connect
 
 - Access is limited to apps available to the API key or user.
 - Reviews are fetched newest first through JSON:API pagination.
-- Pagination stops at `APPLE_MAX_PAGES`.
+- Pagination stops early once reviews are older than the period start, or at
+  `APPLE_MAX_PAGES`; hitting the limit first is reported as `partial`,
+  truncated coverage.
 - App Store Connect can return `429` when rate limits are exceeded.
 - The customer-review endpoint does not provide a period-specific all-rating
   average alongside the written reviews.
@@ -534,22 +571,37 @@ Input constraints:
 
 ## 14. Common errors and fixes
 
-### `ANALYSIS_MODE is set to jev but TYPESAFE_API_KEY is not configured`
+### `A valid access token is required` (401) or `Access control is not configured` (503)
 
-- Replace the placeholder with a valid TypeSafe API key.
-- Confirm the environment variable is available to the server process.
-- Restart the server.
+- 401: enter the access token in the dashboard (the field appears after the
+  first 401) or send `Authorization: Bearer <token>` from API clients.
+- 503: set `ANALYZE_API_TOKEN` on the server; production refuses all requests
+  without it.
 
-### `Google Play is selected but GOOGLE_PLAY_ACCESS_TOKEN is not configured`
+### `The … classifier is selected but … is not configured`
 
-- Mint a valid short-lived token with Android Publisher authorization.
-- Replace the expired or placeholder value.
-- Restart the server.
+- Set the key for the selected classifier (`OPENROUTER_API_KEY` and a pinned
+  `OPENROUTER_MODEL`, or `TYPESAFE_API_KEY`), or select `CLASSIFIER_PROVIDER=mock`.
+- Confirm the environment variable is available to the server process and
+  restart the server.
+
+### `Classification failed for every review`
+
+- Check the server logs for the classifier's HTTP status and body.
+- Typical causes: invalid key, a model that does not support structured
+  outputs, or no provider available under zero-data-retention routing.
+
+### `Google Play is selected but no credentials are configured`
+
+- Set `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` (or `GOOGLE_APPLICATION_CREDENTIALS`).
+- `Could not mint a Google Play access token` means the service account was
+  found but Google rejected it; check the key and Play Console permissions.
 
 ### Google Play returns `401`
 
-- The access token is invalid or expired.
-- Mint a new token and restart the server.
+- The service-account key was revoked, or a manual fallback token expired.
+- Rotate the key, or remove `GOOGLE_PLAY_ACCESS_TOKEN` and use the service
+  account.
 
 ### Google Play returns `403`
 
@@ -558,15 +610,16 @@ Input constraints:
 - Confirm the token has the Android Publisher scope.
 - Confirm the package name exactly matches the owned app.
 
-### `App Store Connect is selected but APPLE_APP_STORE_CONNECT_TOKEN is not configured`
+### `App Store Connect is selected but no credentials are configured`
 
-- Generate a current signed JWT and replace the placeholder.
-- Restart the server.
+- Set `APPLE_ISSUER_ID`, `APPLE_KEY_ID` and `APPLE_PRIVATE_KEY`.
+- `APPLE_PRIVATE_KEY is not a valid PKCS#8 (.p8) ES256 key` means the key
+  contents were truncated or mis-encoded.
 
 ### App Store Connect returns `401`
 
-- Regenerate the JWT.
-- Confirm the Key ID, Issuer ID, ES256 signature, audience, and timestamps.
+- Confirm the Key ID and Issuer ID match the `.p8` key, and that the server
+  clock is correct.
 - Confirm the `.p8` key has not been revoked.
 
 ### App Store Connect returns `403`
@@ -576,7 +629,7 @@ Input constraints:
 
 ### App Store Connect returns `429`
 
-- Wait before retrying.
+- Wait before retrying; partial results are reported as `partial` coverage.
 - Reduce `APPLE_MAX_PAGES` if repeated broad fetches are unnecessary.
 
 ### `Upload at least one store export`
@@ -602,7 +655,7 @@ Input constraints:
 ### One store failed but results are still displayed
 
 This is expected when both stores were selected. ReviewSignal uses successful
-sources and displays the failed source as a notice. Correct the failed
+sources, marks the failed source as `Failed` in Data coverage, and lists it as a notice. Correct the failed
 credential or identifier and rerun to restore complete cross-store coverage.
 
 ## 15. Verification and production build
@@ -628,21 +681,29 @@ npm start
 
 ## 16. Production-readiness checklist
 
-Before relying on ReviewSignal operationally:
+Already handled by the service:
 
-- deploy behind your organization's authentication and authorization layer;
-- store credentials in a managed secret store;
-- replace manual Google access tokens with automatic service-account OAuth
-  token generation;
-- replace manual Apple bearer tokens with automatic short-lived JWT
-  generation;
-- restrict store identities to the minimum apps and permissions;
-- confirm that sending review text to TypeSafe complies with your privacy,
-  retention, and vendor policies;
-- define acceptable date coverage and page limits;
-- use CSV/report ingestion when historical API coverage is insufficient;
-- add monitoring for store authorization failures, rate limits, TypeSafe
-  failures, and unexpectedly empty review periods;
+- server-side minting of Google OAuth tokens and Apple JWTs;
+- bearer-token access control that fails closed in production, plus per-client
+  rate limiting;
+- safe error messages, with upstream details kept in server logs;
+- per-source coverage, truncation and date-semantics reporting.
+
+Still required before relying on ReviewSignal operationally (see
+[`docs/productization-plan.md`](docs/productization-plan.md)):
+
+- replace the shared access token with Loomit OIDC and tenant-scoped
+  authorization;
+- store credentials per publisher in a managed secret store (AWS Secrets
+  Manager + KMS);
+- confirm with Legal that sending review text to the chosen classifier
+  provider complies with the publisher DPA and store API terms;
+- pin the OpenRouter model only after the evaluation set confirms quality and
+  cost;
+- move from on-demand analysis to scheduled incremental ingestion with
+  persistence, so history extends beyond the Google API window;
+- add monitoring for store authorization failures, rate limits, classifier
+  failures and cost, and unexpectedly empty periods;
 - treat the written-review average separately from the stores' all-rating
   metrics;
 - rotate and revoke credentials according to your security policy.

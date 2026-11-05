@@ -1,26 +1,6 @@
 "use client";
 
-import {
-  Activity,
-  Apple,
-  Bot,
-  BrainCircuit,
-  CalendarDays,
-  ChevronRight,
-  CircleAlert,
-  CloudUpload,
-  Database,
-  FileSpreadsheet,
-  Info,
-  LoaderCircle,
-  MessageSquareText,
-  Play,
-  ShieldCheck,
-  Smartphone,
-  Sparkles,
-  Star,
-  TrendingUp,
-} from "lucide-react";
+import Image from "next/image";
 import {
   type ChangeEvent,
   type FormEvent,
@@ -30,12 +10,25 @@ import {
 } from "react";
 
 import {
+  CLASSIFIER_COPY,
+  COVERAGE_COPY,
+  ESTIMATOR_COPY,
+  MEMBERSHIP_COPY,
+  SENTIMENT_COPY,
+  fileToBase64,
+  formatDate,
+  formatPercent,
+  formatRange,
+  headline,
+  sentimentTone,
+  sentimentWord,
+} from "@/app/format";
+import {
   REASON_DEFINITIONS,
   type AnalysisResult,
   type AnalyzeInput,
   type Platform,
   type ReasonSummary,
-  type SentimentLabel,
   type SourceMode,
 } from "@/lib/types";
 
@@ -47,7 +40,6 @@ interface FormState {
   lastN: number;
   androidPackage: string;
   appleAppId: string;
-  translationLanguage: string;
 }
 
 interface CsvSelection {
@@ -55,65 +47,83 @@ interface CsvSelection {
   platform: Platform;
 }
 
+class AnalysisRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+const TOKEN_STORAGE_KEY = "reviewsignal.accessToken";
+
+function readStoredToken(): string {
+  try {
+    return window.sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function storeToken(token: string): void {
+  try {
+    if (token) window.sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+    else window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // Storage can be unavailable (private mode); the token stays in memory.
+  }
+}
+
 async function requestAnalysis(
   state: FormState,
   selectedFiles: CsvSelection[],
+  accessToken: string,
 ): Promise<AnalysisResult> {
-  const files =
+  const csvFiles =
     state.sourceMode === "csv"
       ? await Promise.all(
           selectedFiles.map(async ({ file, platform }) => ({
             name: file.name,
             platform,
-            content: await file.text(),
+            encoding: "base64" as const,
+            content: await fileToBase64(file),
           })),
         )
       : undefined;
   const payload: AnalyzeInput = {
     ...state,
-    androidPackage: state.androidPackage || undefined,
-    appleAppId: state.appleAppId || undefined,
-    translationLanguage: state.translationLanguage || undefined,
-    csvFiles: files,
+    androidPackage: state.androidPackage.trim() || undefined,
+    appleAppId: state.appleAppId.trim() || undefined,
+    csvFiles,
   };
   const response = await fetch("/api/analyze", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
     body: JSON.stringify(payload),
   });
-  const body: unknown = await response.json();
+  const body: unknown = await response.json().catch(() => null);
 
   if (!response.ok) {
+    let message = "The analysis could not be completed.";
     if (typeof body === "object" && body !== null) {
-      const summary =
-        "error" in body && typeof body.error === "string"
-          ? body.error
-          : "The analysis could not be completed.";
-      const details =
+      if ("error" in body && typeof body.error === "string") message = body.error;
+      if (
         "details" in body &&
         Array.isArray(body.details) &&
         body.details.every((detail) => typeof detail === "string")
-          ? body.details.join(" ")
-          : "";
-      throw new Error(details ? `${summary} ${details}` : summary);
+      ) {
+        message = `${message} ${body.details.join(" ")}`;
+      }
     }
-
-    throw new Error("The analysis could not be completed.");
+    throw new AnalysisRequestError(message, response.status);
   }
 
   return body as AnalysisResult;
 }
-
-const SENTIMENT_COPY: Record<
-  SentimentLabel,
-  { label: string; shortLabel: string }
-> = {
-  highly_negative: { label: "Highly negative", shortLabel: "Very neg." },
-  negative: { label: "Negative", shortLabel: "Negative" },
-  neutral_mixed: { label: "Neutral / mixed", shortLabel: "Neutral" },
-  positive: { label: "Positive", shortLabel: "Positive" },
-  highly_positive: { label: "Highly positive", shortLabel: "Very pos." },
-};
 
 function dateInputValue(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -131,103 +141,55 @@ function defaultForm(): FormState {
     lastN: 10,
     androidPackage: "",
     appleAppId: "",
-    translationLanguage: "en",
   };
 }
 
-function formatPercent(value: number): string {
-  return `${Math.round(value * 100)}%`;
-}
-
-function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(new Date(value));
-}
-
-function sentimentFromAverage(value: number): string {
-  if (value < 0.8) return "Highly negative";
-  if (value < 1.6) return "Negative";
-  if (value < 2.4) return "Neutral / mixed";
-  if (value < 3.2) return "Positive";
-  return "Highly positive";
-}
-
-function RatingStars({ rating }: { rating: number }): ReactElement {
-  return (
-    <span className="rating-stars" aria-label={`${rating} out of 5 stars`}>
-      {Array.from({ length: 5 }, (_, index) => (
-        <Star
-          key={index}
-          size={13}
-          fill={index < Math.round(rating) ? "currentColor" : "none"}
-        />
-      ))}
-    </span>
-  );
-}
-
-function ReasonList({
-  items,
+function Pill({
   tone,
+  children,
+}: {
+  tone: "positive" | "negative" | "neutral";
+  children: React.ReactNode;
+}): ReactElement {
+  return <span className={`pill pill--${tone}`}>{children}</span>;
+}
+
+function RankingBars({
+  items,
+  emptyCopy,
 }: {
   items: ReasonSummary[];
-  tone: "negative" | "neutral" | "positive";
+  emptyCopy: string;
 }): ReactElement {
-  if (!items.length) {
-    return <p className="empty-reasons">No reviews in this group.</p>;
-  }
+  if (!items.length) return <p className="muted">{emptyCopy}</p>;
 
   return (
-    <div className="reason-list">
-      {items.map((item) => (
-        <div className="reason-row" key={item.reason}>
-          <div className="reason-row__top">
+    <ol className="ranking">
+      {items.map((item, index) => (
+        <li key={item.reason}>
+          <div className="ranking__label">
             <span>{item.label}</span>
-            <span>{item.count}</span>
+            <span className="mono">
+              {item.count} · {formatPercent(item.share)}
+            </span>
           </div>
-          <div className="reason-track">
+          <div className="ranking__track">
             <span
-              className={`reason-fill reason-fill--${tone}`}
+              className={index === 0 ? "ranking__bar is-top" : "ranking__bar"}
               style={{ width: formatPercent(item.share) }}
             />
           </div>
-        </div>
+        </li>
       ))}
-    </div>
+    </ol>
   );
 }
 
-function ModeButton({
-  active,
-  icon,
-  title,
-  copy,
-  onClick,
-}: {
-  active: boolean;
-  icon: ReactElement;
-  title: string;
-  copy: string;
-  onClick: () => void;
-}): ReactElement {
-  return (
-    <button
-      className={`mode-button ${active ? "mode-button--active" : ""}`}
-      type="button"
-      onClick={onClick}
-    >
-      <span className="mode-button__icon">{icon}</span>
-      <span>
-        <strong>{title}</strong>
-        <small>{copy}</small>
-      </span>
-      <ChevronRight size={16} />
-    </button>
-  );
-}
+const SOURCE_OPTIONS: Array<{ mode: SourceMode; title: string; copy: string }> = [
+  { mode: "demo", title: "Demo dataset", copy: "Synthetic reviews" },
+  { mode: "live_api", title: "Store APIs", copy: "Owned apps only" },
+  { mode: "csv", title: "Store exports", copy: "Historical CSV" },
+];
 
 export default function Home(): ReactElement {
   const [form, setForm] = useState<FormState>(defaultForm);
@@ -235,22 +197,28 @@ export default function Home(): ReactElement {
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [accessToken, setAccessToken] = useState("");
+  const [needsToken, setNeedsToken] = useState(false);
 
-  async function runAnalysis(
-    state: FormState,
-    selectedFiles: CsvSelection[],
-  ): Promise<void> {
+  function handleFailure(failure: unknown): void {
+    if (failure instanceof AnalysisRequestError && failure.status === 401) {
+      setNeedsToken(true);
+    }
+    setError(
+      failure instanceof Error ? failure.message : "The analysis could not be completed.",
+    );
+  }
+
+  async function runAnalysis(): Promise<void> {
     setLoading(true);
     setError("");
-
     try {
-      setResult(await requestAnalysis(state, selectedFiles));
-    } catch (analysisError) {
-      setError(
-        analysisError instanceof Error
-          ? analysisError.message
-          : "The analysis could not be completed.",
-      );
+      setResult(await requestAnalysis(form, csvFiles, accessToken));
+      storeToken(accessToken);
+    } catch (failure) {
+      // Never leave a previous result on screen under a new request's error.
+      setResult(null);
+      handleFailure(failure);
     } finally {
       setLoading(false);
     }
@@ -258,44 +226,43 @@ export default function Home(): ReactElement {
 
   useEffect(() => {
     let active = true;
-    void requestAnalysis(defaultForm(), [])
-      .then((initialResult) => {
-        if (active) setResult(initialResult);
+    const token = readStoredToken();
+    void requestAnalysis(defaultForm(), [], token)
+      .then((initial) => {
+        if (active) setResult(initial);
       })
-      .catch((initialError: unknown) => {
-        if (active) {
-          setError(
-            initialError instanceof Error
-              ? initialError.message
-              : "The demo analysis could not be loaded.",
-          );
+      .catch((failure: unknown) => {
+        if (!active) return;
+        if (failure instanceof AnalysisRequestError && failure.status === 401) {
+          setNeedsToken(true);
         }
+        setError(
+          failure instanceof Error ? failure.message : "The demo analysis could not be loaded.",
+        );
       })
       .finally(() => {
-        if (active) setLoading(false);
+        if (!active) return;
+        setLoading(false);
+        if (token) {
+          setAccessToken(token);
+          setNeedsToken(true);
+        }
       });
-
     return () => {
       active = false;
     };
   }, []);
 
-  function updateField<Key extends keyof FormState>(
-    key: Key,
-    value: FormState[Key],
-  ): void {
+  function updateField<Key extends keyof FormState>(key: Key, value: FormState[Key]): void {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    void runAnalysis(form, csvFiles);
+    void runAnalysis();
   }
 
-  function addCsvFile(
-    event: ChangeEvent<HTMLInputElement>,
-    platform: Platform,
-  ): void {
+  function addCsvFile(event: ChangeEvent<HTMLInputElement>, platform: Platform): void {
     const file = event.target.files?.[0];
     if (!file) return;
     setCsvFiles((current) => [
@@ -304,47 +271,46 @@ export default function Home(): ReactElement {
     ]);
   }
 
+  const summary = result ? headline(result) : null;
+  const isSample = result?.sourceMode === "demo";
+
   return (
-    <main className="app-shell">
+    <div className="app-shell">
       <header className="topbar">
-        <a className="brand" href="#top" aria-label="ReviewSignal home">
-          <span className="brand-mark">
-            <Activity size={20} />
-          </span>
-          <span>
-            Review<span>Signal</span>
-          </span>
-        </a>
-        <div className="topbar__meta">
-          <span className="status-pill">
-            <span className="status-dot" />
-            Owned-app intelligence
-          </span>
-          <span className="topbar__divider" />
-          <span className="secure-label">
-            <ShieldCheck size={15} />
-            Server-side credentials
+        <div className="topbar__brand">
+          <Image
+            src="/brand/loomit-logo-teal.png"
+            alt="loomit"
+            width={84}
+            height={22}
+            priority
+          />
+          <span className="topbar__divider" aria-hidden="true" />
+          <span className="topbar__product">ReviewSignal</span>
+          <span className="eyebrow topbar__eyebrow">Plugin · review intelligence</span>
+        </div>
+        <div className="topbar__status">
+          <span className="status">
+            <span className={`dot ${result ? "is-on" : ""}`} aria-hidden="true" />
+            {result
+              ? `Classifier: ${CLASSIFIER_COPY[result.analysisMode]}`
+              : "Classifier: not run yet"}
           </span>
         </div>
       </header>
 
-      <div className="workspace" id="top">
-        <aside className="control-panel">
-          <div className="panel-intro">
-            <span className="eyebrow">
-              <Sparkles size={13} />
-              New analysis
-            </span>
-            <h1>Understand what users are really saying.</h1>
-            <p>
-              Combine owned-app reviews across stores, then classify sentiment
-              and the reasons behind it.
-            </p>
-          </div>
+      <main className="workspace">
+        <aside className="card control-panel" aria-label="Analysis settings">
+          <p className="eyebrow">New analysis</p>
+          <h1 className="panel-title">Analyze app reviews</h1>
+          <p className="body muted">
+            Combine written reviews from Google Play and the App Store, then
+            classify sentiment and the reason behind each one.
+          </p>
 
-          <form onSubmit={handleSubmit}>
-            <div className="form-section">
-              <label className="field-label" htmlFor="appName">
+          <form onSubmit={handleSubmit} className="form">
+            <div className="field">
+              <label className="label" htmlFor="appName">
                 Analysis name
               </label>
               <input
@@ -356,60 +322,53 @@ export default function Home(): ReactElement {
               />
             </div>
 
-            <div className="form-section">
-              <span className="field-label">Data source</span>
-              <div className="mode-list">
-                <ModeButton
-                  active={form.sourceMode === "demo"}
-                  icon={<Bot size={18} />}
-                  title="Demo dataset"
-                  copy="No credentials required"
-                  onClick={() => updateField("sourceMode", "demo")}
-                />
-                <ModeButton
-                  active={form.sourceMode === "live_api"}
-                  icon={<Database size={18} />}
-                  title="Official store APIs"
-                  copy="Owned apps only"
-                  onClick={() => updateField("sourceMode", "live_api")}
-                />
-                <ModeButton
-                  active={form.sourceMode === "csv"}
-                  icon={<CloudUpload size={18} />}
-                  title="Store exports"
-                  copy="Historical CSV files"
-                  onClick={() => updateField("sourceMode", "csv")}
-                />
+            <fieldset className="field">
+              <legend className="label">Data source</legend>
+              <div className="segmented" role="radiogroup" aria-label="Data source">
+                {SOURCE_OPTIONS.map((option) => (
+                  <button
+                    key={option.mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={form.sourceMode === option.mode}
+                    className={
+                      form.sourceMode === option.mode
+                        ? "segmented__option is-active"
+                        : "segmented__option"
+                    }
+                    onClick={() => updateField("sourceMode", option.mode)}
+                  >
+                    <strong>{option.title}</strong>
+                    <small>{option.copy}</small>
+                  </button>
+                ))}
               </div>
-            </div>
+            </fieldset>
 
             {form.sourceMode === "live_api" && (
-              <div className="form-section source-fields">
-                <div>
-                  <label className="field-label" htmlFor="androidPackage">
-                    <Smartphone size={14} />
+              <div className="field-grid">
+                <div className="field">
+                  <label className="label" htmlFor="androidPackage">
                     Android package
                   </label>
                   <input
                     id="androidPackage"
+                    className="mono-input"
                     value={form.androidPackage}
-                    onChange={(event) =>
-                      updateField("androidPackage", event.target.value)
-                    }
+                    onChange={(event) => updateField("androidPackage", event.target.value)}
                     placeholder="com.company.app"
                   />
                 </div>
-                <div>
-                  <label className="field-label" htmlFor="appleAppId">
-                    <Apple size={14} />
+                <div className="field">
+                  <label className="label" htmlFor="appleAppId">
                     App Store Connect ID
                   </label>
                   <input
                     id="appleAppId"
+                    className="mono-input"
+                    inputMode="numeric"
                     value={form.appleAppId}
-                    onChange={(event) =>
-                      updateField("appleAppId", event.target.value)
-                    }
+                    onChange={(event) => updateField("appleAppId", event.target.value)}
                     placeholder="123456789"
                   />
                 </div>
@@ -417,23 +376,16 @@ export default function Home(): ReactElement {
             )}
 
             {form.sourceMode === "csv" && (
-              <div className="form-section upload-grid">
+              <div className="field-grid">
                 {(["android", "ios"] as Platform[]).map((platform) => {
-                  const selection = csvFiles.find(
-                    (entry) => entry.platform === platform,
-                  );
+                  const selection = csvFiles.find((entry) => entry.platform === platform);
                   return (
-                    <label className="upload-card" key={platform}>
-                      {platform === "android" ? (
-                        <Smartphone size={18} />
-                      ) : (
-                        <Apple size={18} />
-                      )}
-                      <span>
-                        <strong>
-                          {platform === "android" ? "Google Play" : "App Store"}
-                        </strong>
-                        <small>{selection?.file.name ?? "Choose CSV"}</small>
+                    <label className="upload" key={platform}>
+                      <span className="label">
+                        {platform === "android" ? "Google Play report" : "App Store CSV"}
+                      </span>
+                      <span className="upload__file">
+                        {selection?.file.name ?? "Choose a CSV file"}
                       </span>
                       <input
                         type="file"
@@ -446,397 +398,317 @@ export default function Home(): ReactElement {
               </div>
             )}
 
-            <div className="form-section">
-              <span className="field-label">
-                <CalendarDays size={14} />
-                Review period
-              </span>
-              <div className="date-grid">
-                <label>
-                  <small>From</small>
-                  <input
-                    type="date"
-                    value={form.startDate}
-                    onChange={(event) =>
-                      updateField("startDate", event.target.value)
-                    }
-                    required
-                  />
+            <div className="field-grid">
+              <div className="field">
+                <label className="label" htmlFor="startDate">
+                  From (UTC)
                 </label>
-                <label>
-                  <small>To</small>
-                  <input
-                    type="date"
-                    value={form.endDate}
-                    onChange={(event) =>
-                      updateField("endDate", event.target.value)
-                    }
-                    required
-                  />
+                <input
+                  id="startDate"
+                  type="date"
+                  value={form.startDate}
+                  onChange={(event) => updateField("startDate", event.target.value)}
+                  required
+                />
+              </div>
+              <div className="field">
+                <label className="label" htmlFor="endDate">
+                  To (UTC)
                 </label>
+                <input
+                  id="endDate"
+                  type="date"
+                  value={form.endDate}
+                  onChange={(event) => updateField("endDate", event.target.value)}
+                  required
+                />
               </div>
             </div>
 
-            <div className="form-section">
-              <div className="range-heading">
-                <label className="field-label" htmlFor="lastN">
-                  Latest reviews to show
+            <div className="field">
+              <div className="field__row">
+                <label className="label" htmlFor="lastN">
+                  Latest reviews to list
                 </label>
-                <strong>{form.lastN}</strong>
+                <span className="mono">{form.lastN}</span>
               </div>
               <input
                 id="lastN"
-                className="range-input"
+                className="range"
                 type="range"
                 min="5"
                 max="50"
                 step="5"
                 value={form.lastN}
-                onChange={(event) =>
-                  updateField("lastN", Number(event.target.value))
-                }
+                onChange={(event) => updateField("lastN", Number(event.target.value))}
               />
-              <div className="range-scale">
-                <span>5</span>
-                <span>50</span>
-              </div>
             </div>
 
-            <button className="analyze-button" disabled={loading} type="submit">
-              {loading ? (
-                <LoaderCircle className="spin" size={18} />
-              ) : (
-                <Play size={17} fill="currentColor" />
-              )}
-              {loading ? "Analyzing reviews…" : "Run sentiment analysis"}
+            {needsToken && (
+              <div className="field">
+                <label className="label" htmlFor="accessToken">
+                  Access token
+                </label>
+                <input
+                  id="accessToken"
+                  className="mono-input"
+                  type="password"
+                  autoComplete="off"
+                  value={accessToken}
+                  onChange={(event) => setAccessToken(event.target.value)}
+                  placeholder="Provided by your Loomit admin"
+                />
+              </div>
+            )}
+
+            <button className="button-primary" disabled={loading} type="submit">
+              {loading ? "Analyzing reviews…" : "Run analysis"}
             </button>
           </form>
 
-          <div className="privacy-note">
-            <ShieldCheck size={16} />
-            <span>
-              Tokens stay on the server and are never sent to the browser.
-            </span>
-          </div>
+          <p className="fineprint">
+            Store and classifier credentials stay on the server. Reviews are
+            classified in their original language.
+          </p>
         </aside>
 
-        <section className="results-panel">
-          <div className="results-header">
-            <div>
-              <span className="eyebrow eyebrow--blue">
-                <TrendingUp size={13} />
-                Review intelligence
-              </span>
-              <h2>{result?.appName ?? form.appName}</h2>
-              <p>
-                {result
-                  ? `${formatDate(result.period.startDate)} — ${formatDate(result.period.endDate)}`
-                  : "Preparing your analysis…"}
-              </p>
-            </div>
-            <div className="model-pill">
-              <BrainCircuit size={16} />
-              <span>
-                <small>Classifier</small>
-                {result?.analysisMode === "jev"
-                  ? result.model
-                  : "Mock rules · demo"}
-              </span>
-            </div>
-          </div>
-
+        <section className="results" aria-live="polite" aria-busy={loading}>
           {error && (
-            <div className="error-banner">
-              <CircleAlert size={18} />
-              <div>
-                <strong>Analysis failed</strong>
-                <p>{error}</p>
-              </div>
+            <div className="card card--chip alert" role="alert">
+              <Pill tone="negative">Error</Pill>
+              <p className="body">{error}</p>
             </div>
           )}
 
           {loading && !result ? (
-            <div className="loading-state">
-              <span className="loading-orbit">
-                <BrainCircuit size={34} />
-              </span>
-              <h3>Reading the signal</h3>
-              <p>Normalizing reviews and classifying user feedback…</p>
+            <div className="card empty-state">
+              <p className="eyebrow">Working</p>
+              <h2 className="section-title">Classifying reviews…</h2>
+              <p className="body muted">Fetching, normalizing and classifying written reviews.</p>
             </div>
-          ) : result ? (
+          ) : result && summary ? (
             <>
-              <div className="metric-grid">
-                <article className="metric-card metric-card--primary">
-                  <span className="metric-icon">
-                    <BrainCircuit size={19} />
-                  </span>
-                  <div className="metric-heading">
-                    <span>Average sentiment</span>
-                    <Info size={13} />
-                  </div>
-                  <strong>{result.metrics.averageSentiment.toFixed(2)}</strong>
-                  <span className="metric-scale">out of 4.00</span>
-                  <div className="sentiment-meter">
-                    <span
-                      style={{
-                        width: `${(result.metrics.averageSentiment / 4) * 100}%`,
-                      }}
-                    />
-                  </div>
-                  <small>
-                    {sentimentFromAverage(result.metrics.averageSentiment)}
-                  </small>
-                </article>
+              <header className="results__header">
+                <div>
+                  <p className="eyebrow">
+                    {result.appName} · {formatRange(result.period.startDate, result.period.endDate)}
+                  </p>
+                  <h2 className="page-title">{summary.title}</h2>
+                  <p className="subtitle">{summary.subtitle}</p>
+                </div>
+                {isSample && <span className="sample-tag">Sample data</span>}
+              </header>
 
-                <article className="metric-card">
-                  <span className="metric-icon metric-icon--amber">
-                    <Star size={19} fill="currentColor" />
-                  </span>
-                  <div className="metric-heading">
-                    <span>Written-review rating</span>
-                    <Info size={13} />
-                  </div>
-                  <strong>{result.metrics.averageRating.toFixed(2)}</strong>
-                  <span className="metric-scale">out of 5.00</span>
-                  <RatingStars rating={result.metrics.averageRating} />
-                  <small>Excludes star-only ratings</small>
-                </article>
-
-                <article className="metric-card">
-                  <span className="metric-icon metric-icon--violet">
-                    <MessageSquareText size={19} />
-                  </span>
-                  <div className="metric-heading">
-                    <span>Reviews analyzed</span>
-                    <Info size={13} />
-                  </div>
-                  <strong>{result.metrics.reviewsAnalyzed}</strong>
-                  <span className="metric-scale">written reviews</span>
-                  <div className="store-counts">
-                    <span>
-                      <Smartphone size={13} />
-                      {result.metrics.androidReviews} Android
-                    </span>
-                    <span>
-                      <Apple size={13} />
-                      {result.metrics.iosReviews} iOS
-                    </span>
+              <div className="kpi-row">
+                <article className="card card--brand kpi">
+                  <p className="label">Average sentiment</p>
+                  <p className="kpi__value">
+                    {result.metrics.averageSentiment.toFixed(2)}
+                    <span className="kpi__unit">/ 4</span>
+                  </p>
+                  <p className="kpi__note">
+                    {sentimentWord(result.metrics.averageSentiment)} ·{" "}
+                    {ESTIMATOR_COPY[result.metrics.sentimentEstimator].toLowerCase()}
+                  </p>
+                  <div className="meter" aria-hidden="true">
+                    <span style={{ width: `${(result.metrics.averageSentiment / 4) * 100}%` }} />
                   </div>
                 </article>
 
-                <article className="metric-card">
-                  <span className="metric-icon metric-icon--green">
-                    <ShieldCheck size={19} />
-                  </span>
-                  <div className="metric-heading">
-                    <span>Avg. confidence</span>
-                    <Info size={13} />
-                  </div>
-                  <strong>
-                    {formatPercent(result.metrics.averageConfidence)}
-                  </strong>
-                  <span className="metric-scale">sentiment confidence</span>
-                  <div className="confidence-track">
-                    <span
-                      style={{
-                        width: formatPercent(
-                          result.metrics.averageConfidence,
-                        ),
-                      }}
-                    />
-                  </div>
-                  <small>{result.model}</small>
+                <article className="card kpi">
+                  <p className="label">Written-review rating</p>
+                  <p className="kpi__value">
+                    {result.metrics.averageRating.toFixed(2)}
+                    <span className="kpi__unit">/ 5</span>
+                  </p>
+                  <p className="kpi__note">Excludes star-only ratings</p>
+                </article>
+
+                <article className="card kpi">
+                  <p className="label">Reviews analyzed</p>
+                  <p className="kpi__value">{result.metrics.reviewsAnalyzed}</p>
+                  <p className="kpi__note">
+                    {result.metrics.androidReviews} Google Play · {result.metrics.iosReviews} App Store
+                    {result.metrics.reviewsUnclassified > 0 &&
+                      ` · ${result.metrics.reviewsUnclassified} unclassified`}
+                  </p>
+                </article>
+
+                <article className="card kpi">
+                  <p className="label">Classifier confidence</p>
+                  <p className="kpi__value">{formatPercent(result.metrics.averageConfidence)}</p>
+                  <p className="kpi__note mono-note" title={result.classifier.model}>
+                    {result.classifier.model}
+                  </p>
                 </article>
               </div>
 
-              <div className="insights-grid">
-                <article className="surface distribution-card">
-                  <div className="section-heading">
-                    <div>
-                      <span className="section-kicker">Distribution</span>
-                      <h3>Sentiment mix</h3>
-                    </div>
-                    <span className="sample-pill">
-                      n = {result.metrics.reviewsAnalyzed}
-                    </span>
-                  </div>
-                  <div className="stacked-bar">
+              <div className="split">
+                <article className="card">
+                  <p className="eyebrow">Distribution · n = {result.metrics.reviewsAnalyzed}</p>
+                  <h3 className="card-title">Sentiment mix</h3>
+                  <div className="stacked" role="img" aria-label="Sentiment distribution">
                     {result.sentimentDistribution.map((item) => (
                       <span
-                        className={`sentiment-block sentiment-block--${item.label}`}
                         key={item.label}
+                        className={`stacked__seg seg--${item.label}`}
                         style={{ width: formatPercent(item.share) }}
                         title={`${SENTIMENT_COPY[item.label].label}: ${item.count}`}
                       />
                     ))}
                   </div>
-                  <div className="distribution-legend">
+                  <ul className="legend">
                     {result.sentimentDistribution.map((item) => (
-                      <div key={item.label}>
-                        <span
-                          className={`legend-dot legend-dot--${item.label}`}
-                        />
-                        <span>
-                          <strong>{formatPercent(item.share)}</strong>
-                          <small>{SENTIMENT_COPY[item.label].shortLabel}</small>
-                        </span>
-                      </div>
+                      <li key={item.label}>
+                        <span className={`legend__swatch seg--${item.label}`} aria-hidden="true" />
+                        <span>{SENTIMENT_COPY[item.label].short}</span>
+                        <span className="mono">{formatPercent(item.share)}</span>
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 </article>
 
-                <article className="surface coverage-card">
-                  <div className="section-heading">
+                <article className="card">
+                  <p className="eyebrow">Data coverage</p>
+                  <h3 className="card-title">
+                    {result.coverage.every((item) => item.status === "complete")
+                      ? "All selected sources are complete"
+                      : "Some sources are incomplete"}
+                  </h3>
+                  <ul className="coverage">
+                    {result.coverage.map((item) => (
+                      <li key={`${item.source}-${item.label}`}>
+                        <div className="coverage__row">
+                          <span className="coverage__name">{item.label}</span>
+                          <Pill tone={COVERAGE_COPY[item.status].tone}>
+                            {COVERAGE_COPY[item.status].label}
+                          </Pill>
+                        </div>
+                        <p className="coverage__meta mono">
+                          {item.reviewsFetched} reviews
+                          {item.pagesFetched !== undefined && ` · ${item.pagesFetched} pages`}
+                          {item.truncated && " · truncated"}
+                        </p>
+                        {item.note && <p className="body muted">{item.note}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                  <dl className="facts">
                     <div>
-                      <span className="section-kicker">Data quality</span>
-                      <h3>Coverage snapshot</h3>
+                      <dt className="label">Period by</dt>
+                      <dd>{MEMBERSHIP_COPY[result.period.membership]}</dd>
                     </div>
-                    <ShieldCheck size={19} />
-                  </div>
-                  <div className="coverage-row">
-                    <span>Source</span>
-                    <strong>
-                      {result.sourceMode === "demo"
-                        ? "Synthetic demo"
-                        : result.sourceMode === "csv"
-                          ? "Store export"
-                          : "Official APIs"}
-                    </strong>
-                  </div>
-                  <div className="coverage-row">
-                    <span>Period membership</span>
-                    <strong>Review date</strong>
-                  </div>
-                  <div className="coverage-row">
-                    <span>Rating scope</span>
-                    <strong>Written only</strong>
-                  </div>
+                    <div>
+                      <dt className="label">Rating scope</dt>
+                      <dd>Written reviews only</dd>
+                    </div>
+                  </dl>
                 </article>
               </div>
 
-              <article className="surface reasons-card">
-                <div className="section-heading">
-                  <div>
-                    <span className="section-kicker">Drivers</span>
-                    <h3>Why users feel this way</h3>
-                  </div>
-                  <p>Primary reason per review</p>
-                </div>
-                <div className="reason-columns">
+              <article className="card">
+                <p className="eyebrow">Drivers · primary reason per review</p>
+                <h3 className="card-title">Why users feel this way</h3>
+                <div className="reasons">
                   <section>
-                    <div className="reason-title reason-title--negative">
-                      <span />
-                      Negative
-                    </div>
-                    <ReasonList
-                      items={result.reasons.negative}
-                      tone="negative"
-                    />
+                    <p className="reasons__title">
+                      <Pill tone="negative">Negative</Pill>
+                    </p>
+                    <RankingBars items={result.reasons.negative} emptyCopy="No negative reviews." />
                   </section>
                   <section>
-                    <div className="reason-title reason-title--neutral">
-                      <span />
-                      Neutral / mixed
-                    </div>
-                    <ReasonList
-                      items={result.reasons.neutral}
-                      tone="neutral"
-                    />
+                    <p className="reasons__title">
+                      <Pill tone="neutral">Mixed</Pill>
+                    </p>
+                    <RankingBars items={result.reasons.neutral} emptyCopy="No mixed reviews." />
                   </section>
                   <section>
-                    <div className="reason-title reason-title--positive">
-                      <span />
-                      Positive
-                    </div>
-                    <ReasonList
-                      items={result.reasons.positive}
-                      tone="positive"
-                    />
+                    <p className="reasons__title">
+                      <Pill tone="positive">Positive</Pill>
+                    </p>
+                    <RankingBars items={result.reasons.positive} emptyCopy="No positive reviews." />
                   </section>
                 </div>
               </article>
 
-              <article className="surface reviews-card">
-                <div className="section-heading">
+              <article className="card">
+                <div className="card-heading">
                   <div>
-                    <span className="section-kicker">Review map</span>
-                    <h3>Latest classified reviews</h3>
+                    <p className="eyebrow">Latest {result.reviews.length} reviews</p>
+                    <h3 className="card-title">What users wrote most recently</h3>
                   </div>
-                  <span className="sample-pill">
-                    Latest {result.reviews.length}
-                  </span>
                 </div>
-                <div className="review-table">
-                  <div className="review-table__header">
-                    <span>Review</span>
-                    <span>Store & rating</span>
-                    <span>Sentiment</span>
-                    <span>Primary reason</span>
-                  </div>
-                  {result.reviews.map((review) => (
-                    <div className="review-row" key={`${review.store}-${review.id}`}>
-                      <div className="review-copy">
-                        <div>
-                          <strong>{review.title || "Untitled review"}</strong>
-                          <time>{formatDate(review.createdAt)}</time>
-                        </div>
-                        <p>{review.body}</p>
-                      </div>
-                      <div className="review-store">
-                        <span className={`store-icon store-icon--${review.platform}`}>
-                          {review.platform === "android" ? (
-                            <Smartphone size={15} />
-                          ) : (
-                            <Apple size={15} />
-                          )}
-                        </span>
-                        <div>
-                          <strong>
-                            {review.platform === "android"
-                              ? "Google Play"
-                              : "App Store"}
-                          </strong>
-                          <RatingStars rating={review.rating} />
-                        </div>
-                      </div>
-                      <div>
-                        <span
-                          className={`sentiment-badge sentiment-badge--${review.analysis.sentimentLabel}`}
-                        >
-                          {SENTIMENT_COPY[review.analysis.sentimentLabel].label}
-                        </span>
-                        <small className="confidence-copy">
-                          {formatPercent(review.analysis.sentimentConfidence)} confidence
-                        </small>
-                      </div>
-                      <div className="reason-chip">
-                        {REASON_DEFINITIONS[review.analysis.primaryReason]}
-                      </div>
-                    </div>
-                  ))}
+                <div className="table-wrap">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Review</th>
+                        <th scope="col">Store</th>
+                        <th scope="col" className="num">Rating</th>
+                        <th scope="col">Sentiment</th>
+                        <th scope="col">Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.reviews.map((review) => (
+                        <tr key={`${review.store}-${review.id}`}>
+                          <td className="table__review">
+                            <strong>{review.title || "Untitled review"}</strong>
+                            <p>{review.body}</p>
+                            <span className="mono table__meta">
+                              {formatDate(review.createdAt)}
+                              {review.appVersion && ` · v${review.appVersion}`}
+                              {review.territory && ` · ${review.territory}`}
+                            </span>
+                          </td>
+                          <td data-label="Store">
+                            {review.platform === "android" ? "Google Play" : "App Store"}
+                          </td>
+                          <td data-label="Rating" className="num mono">
+                            {review.rating}/5
+                          </td>
+                          <td data-label="Sentiment">
+                            <Pill tone={sentimentTone(review.analysis.sentimentLabel)}>
+                              {SENTIMENT_COPY[review.analysis.sentimentLabel].label}
+                            </Pill>
+                            <span className="mono table__meta">
+                              {formatPercent(review.analysis.sentimentConfidence)} conf.
+                            </span>
+                          </td>
+                          <td data-label="Reason">
+                            {REASON_DEFINITIONS[review.analysis.primaryReason]}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </article>
 
-              <div className="notice-stack">
-                {result.notices.map((notice) => (
-                  <div className="notice" key={notice}>
-                    <Info size={15} />
-                    <span>{notice}</span>
-                  </div>
-                ))}
-              </div>
+              {result.notices.length > 0 && (
+                <article className="card card--chip notes">
+                  <p className="label">Notes on this analysis</p>
+                  <ul>
+                    {result.notices.map((notice) => (
+                      <li key={notice} className="body">
+                        {notice}
+                      </li>
+                    ))}
+                  </ul>
+                </article>
+              )}
+
+              <footer className="results__footer mono">
+                <span>
+                  {CLASSIFIER_COPY[result.classifier.provider]} · {result.classifier.promptVersion} ·{" "}
+                  {result.classifier.taxonomyVersion}
+                </span>
+                <span>Official store APIs and exports only</span>
+              </footer>
             </>
           ) : null}
-
-          <footer className="results-footer">
-            <span>
-              <FileSpreadsheet size={14} />
-              Official APIs and exports only
-            </span>
-            <span>ReviewSignal MVP</span>
-          </footer>
         </section>
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }

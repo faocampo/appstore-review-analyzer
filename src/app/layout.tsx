@@ -3,9 +3,9 @@ import type { Metadata } from "next";
 import "@/app/globals.css";
 
 export const metadata: Metadata = {
-  title: "ReviewSignal — App Review Intelligence",
+  title: "ReviewSignal · loomit",
   description:
-    "Cross-platform sentiment analysis for owned Google Play and App Store apps.",
+    "Review intelligence for loomit publishers: sentiment and reasons across Google Play and the App Store.",
 };
 
 export default function RootLayout({

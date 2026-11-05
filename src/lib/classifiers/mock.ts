@@ -1,5 +1,11 @@
 import {
-  REASON_DEFINITIONS,
+  REASON_KEYS,
+  TAXONOMY_VERSION,
+  buildClassification,
+  type ClassifierInfo,
+  type ClassifierProvider,
+} from "@/lib/classifiers/provider";
+import {
   SENTIMENT_LABELS,
   type Classification,
   type ReasonKey,
@@ -7,6 +13,13 @@ import {
   type SentimentLabel,
   type SentimentScore,
 } from "@/lib/types";
+
+export const MOCK_INFO: ClassifierInfo = {
+  provider: "mock",
+  model: "mock-rules-v1",
+  promptVersion: "rules-v1",
+  taxonomyVersion: TAXONOMY_VERSION,
+};
 
 const REASON_KEYWORDS: Record<ReasonKey, string[]> = {
   ads: ["ad ", "ads", "advert", "commercial"],
@@ -86,7 +99,7 @@ function findReason(review: Review): ReasonKey {
   let bestReason: ReasonKey = review.rating >= 4 ? "praise_general" : "other_unclear";
   let bestHits = 0;
 
-  for (const reason of Object.keys(REASON_DEFINITIONS) as ReasonKey[]) {
+  for (const reason of REASON_KEYS) {
     const hits = REASON_KEYWORDS[reason].filter((keyword) =>
       text.includes(keyword),
     ).length;
@@ -102,33 +115,42 @@ function findReason(review: Review): ReasonKey {
 function reasonProbabilities(
   primaryReason: ReasonKey,
 ): Record<ReasonKey, number> {
-  const keys = Object.keys(REASON_DEFINITIONS) as ReasonKey[];
-  const secondaryWeight = 0.25 / (keys.length - 1);
+  const secondaryWeight = 0.25 / (REASON_KEYS.length - 1);
   return Object.fromEntries(
-    keys.map((key) => [key, key === primaryReason ? 0.75 : secondaryWeight]),
+    REASON_KEYS.map((key) => [
+      key,
+      key === primaryReason ? 0.75 : secondaryWeight,
+    ]),
   ) as Record<ReasonKey, number>;
 }
 
+/** Transparent, deterministic keyword and rating rules. No network calls. */
 export function classifyMock(review: Review): Classification {
   const sentimentScore = scoreFromRating(review);
-  const sentimentProbabilitiesValue =
-    sentimentProbabilities(sentimentScore);
+  const probabilities = sentimentProbabilities(sentimentScore);
   const primaryReason = findReason(review);
-  const sentimentExpectedValue = SENTIMENT_LABELS.reduce(
-    (sum, label, index) =>
-      sum + sentimentProbabilitiesValue[label] * index,
-    0,
-  );
 
-  return {
-    sentimentScore,
-    sentimentLabel: SENTIMENT_LABELS[sentimentScore],
-    sentimentExpectedValue,
-    sentimentProbabilities: sentimentProbabilitiesValue,
-    sentimentConfidence: sentimentProbabilitiesValue[SENTIMENT_LABELS[sentimentScore]],
+  return buildClassification({
+    info: MOCK_INFO,
+    providerScore: sentimentScore,
+    sentimentProbabilities: probabilities,
+    sentimentConfidence: probabilities[SENTIMENT_LABELS[sentimentScore]],
     primaryReason,
     reasonProbabilities: reasonProbabilities(primaryReason),
     reasonConfidence: 0.75,
-    model: "mock-rules-v1",
+  });
+}
+
+export function createMockClassifier(): ClassifierProvider {
+  return {
+    info: MOCK_INFO,
+    maxBatch: 100,
+    concurrency: 1,
+    async classify(reviews) {
+      return reviews.map((review) => ({
+        ok: true as const,
+        classification: classifyMock(review),
+      }));
+    },
   };
 }

@@ -1,0 +1,721 @@
+{
+ "name": "loomit",
+ "version": 2,
+ "meta": {
+  "source": "loomit-slides plugin 2.0.0 (Calm Glass): scripts/loomit.js, scripts/post.py, assets/, fonts/"
+ },
+ "color": {
+  "themes": [
+   {
+    "id": "light",
+    "name": "Light slide"
+   },
+   {
+    "id": "dark",
+    "name": "Dark slide"
+   }
+  ],
+  "tokens": [
+   {
+    "name": "ground",
+    "value": {
+     "light": "#f5f8f8",
+     "dark": "#013e4e"
+    },
+    "usage": "Flat stand-in for the slide background images (bg-light-a/b on light, bg-dark on dark). Use the images on real slides; this is the colour under them and the ground every text note below is measured on."
+   },
+   {
+    "name": "fg",
+    "value": {
+     "light": "{ink}",
+     "dark": "{white}"
+    },
+    "usage": "Slide titles, card titles, big table values. 13:1 on light ground; 11:1 white on the dark ground."
+   },
+   {
+    "name": "fg-2",
+    "value": {
+     "light": "{ink-2}",
+     "dark": "{on-dark}"
+    },
+    "usage": "Subtitles, body and captions (7.9:1 on light; 9:1+ on dark)."
+   },
+   {
+    "name": "fg-3",
+    "value": {
+     "light": "{ink-3}",
+     "dark": "{on-dark-2}"
+    },
+    "usage": "Labels, page numbers, table headers, the SAMPLE DATA tag (4.9:1 on light; 6:1+ on dark)."
+   },
+   {
+    "name": "eyebrow",
+    "value": {
+     "light": "{eyebrow-teal}",
+     "dark": "{mint}"
+    },
+    "usage": "The mono uppercase eyebrow above every title: eyebrow teal on light (5.8:1), mint on dark."
+   },
+   {
+    "name": "number",
+    "value": {
+     "light": "{brand}",
+     "dark": "{lime}"
+    },
+    "usage": "Hero numbers: brand teal on light, lime on dark (lime is the one key number of a dark slide)."
+   },
+   {
+    "name": "takeaway",
+    "value": {
+     "light": "{brand}",
+     "dark": "{white}"
+    },
+    "usage": "The one-line takeaway under the content (Medium 14)."
+   },
+   {
+    "name": "ink",
+    "value": "#013240",
+    "usage": "Primary text on light; text on lime and mint fills; the dark end of brand gradients."
+   },
+   {
+    "name": "ink-2",
+    "value": "#3f5056",
+    "usage": "Secondary text on light (body, subtitles)."
+   },
+   {
+    "name": "ink-3",
+    "value": "#5e7076",
+    "usage": "Tertiary text on light: labels, page numbers, table headers (4.9:1 on paper, 5.2:1 on white glass)."
+   },
+   {
+    "name": "brand",
+    "value": "#024a5e",
+    "usage": "Brand teal: hero numbers, takeaways, the highlighted bar, the teal logo. 9.3:1 on paper."
+   },
+   {
+    "name": "eyebrow-teal",
+    "value": "#006a88",
+    "usage": "Eyebrows on light slides (5.8:1 on paper)."
+   },
+   {
+    "name": "chart-blue",
+    "value": "#00789a",
+    "usage": "Chart series 1 (test / optimized line), timeline progress, done steps."
+   },
+   {
+    "name": "chart-olive",
+    "value": "#9db01a",
+    "usage": "Chart series 3 in share bars. Fill only, never text."
+   },
+   {
+    "name": "chart-cobalt",
+    "value": "#3370d5",
+    "usage": "Chart series 4 in share bars. Fill only."
+   },
+   {
+    "name": "chart-grey",
+    "value": "#aebbc0",
+    "usage": "Control series in line charts (drawn dashed)."
+   },
+   {
+    "name": "bar-grey",
+    "value": "#b6c4c9",
+    "usage": "Every bar but the top one in a ranking."
+   },
+   {
+    "name": "axis-grey",
+    "value": "#c9d4d8",
+    "usage": "Timeline track, divider line next to the hero number."
+   },
+   {
+    "name": "grid",
+    "value": "#e6ecee",
+    "usage": "Chart value gridlines."
+   },
+   {
+    "name": "hair",
+    "value": "#e1e8ea",
+    "usage": "Hairlines between rows in tables and stat lists."
+   },
+   {
+    "name": "paper",
+    "value": "#f7f9f9",
+    "usage": "Light neutral (PowerPoint theme lt2)."
+   },
+   {
+    "name": "white",
+    "value": "#ffffff",
+    "usage": "Titles on dark slides; glass card fill."
+   },
+   {
+    "name": "mint",
+    "value": "#00ffb6",
+    "usage": "Accent on dark only: eyebrows, the 36×2 rule, highlighted words in statements, the before/after arrow, the logo. Never text on a light ground."
+   },
+   {
+    "name": "lime",
+    "value": "#ddef30",
+    "usage": "Accent on dark only: the one key number per dark slide, the closing CTA line, the TEST START pill (with ink text, 10.8:1)."
+   },
+   {
+    "name": "on-dark",
+    "value": "#e6eff1",
+    "usage": "Body text on dark slides and brand cards (8.4:1 on brand)."
+   },
+   {
+    "name": "on-dark-2",
+    "value": "#a9ccd4",
+    "usage": "Labels and page numbers on dark slides (8:1 on ink). On the brand card's lighter top it is 4.4:1: keep it to the mono labels there."
+   },
+   {
+    "name": "positive",
+    "value": "#107a38",
+    "usage": "Positive delta text, on positive-bg (4.8:1)."
+   },
+   {
+    "name": "positive-bg",
+    "value": "#e3f4ea",
+    "usage": "Fill of positive pills."
+   },
+   {
+    "name": "negative",
+    "value": "#c73d42",
+    "usage": "Negative delta text. On negative-bg it reaches 4.3:1 (the source's own pair, just under 4.5): fine for the short mono pill, never for body text. 5:1 on white."
+   },
+   {
+    "name": "negative-bg",
+    "value": "#fbe9ea",
+    "usage": "Fill of negative pills."
+   },
+   {
+    "name": "brand-hi",
+    "value": "#035c74",
+    "usage": "Light end of the brand card and the teal side panel gradients."
+   },
+   {
+    "name": "panel-lo",
+    "value": "#012a36",
+    "usage": "Dark end of the teal side panel gradient."
+   },
+   {
+    "name": "brand-pill",
+    "value": "#1d5e70",
+    "usage": "Pill fill inside a brand card (mint text, 5.5:1)."
+   },
+   {
+    "name": "start-line",
+    "value": "#b7c93a",
+    "usage": "Dashed TEST START marker line in line charts."
+   },
+   {
+    "name": "dot-strong",
+    "value": "#00a072",
+    "usage": "Status dot for Optimizing (with a soft ring)."
+   },
+   {
+    "name": "dot-on",
+    "value": "#6b7c82",
+    "usage": "Status dot for Active / Running / Live."
+   },
+   {
+    "name": "dot-off",
+    "value": "#b8c3c7",
+    "usage": "Status dot for paused or incomplete."
+   },
+   {
+    "name": "glass-edge-top",
+    "value": "#e3eaec",
+    "usage": "Top of the glass card's 1px edge gradient."
+   },
+   {
+    "name": "glass-edge-bottom",
+    "value": "#bcc9ce",
+    "usage": "Bottom of the glass card's 1px edge gradient."
+   },
+   {
+    "name": "rec-edge",
+    "value": "#98abb2",
+    "usage": "Dotted edge of the screen-recording placeholder."
+   },
+   {
+    "name": "dark-top",
+    "value": "#01495c",
+    "usage": "Lightest corner of the dark slide background (top left)."
+   },
+   {
+    "name": "dark-bottom",
+    "value": "#002a36",
+    "usage": "Darkest corner of the dark slide background (bottom right)."
+   }
+  ]
+ },
+ "type": {
+  "fonts": [
+   {
+    "family": "Red Hat Display",
+    "file": "fonts/RedHatDisplay.ttf",
+    "weight": "400"
+   },
+   {
+    "family": "Red Hat Display",
+    "file": "fonts/RedHatDisplayMedium.ttf",
+    "weight": "500"
+   },
+   {
+    "family": "Red Hat Display",
+    "file": "fonts/RedHatDisplaySemiBold.ttf",
+    "weight": "600"
+   },
+   {
+    "family": "Red Hat Display",
+    "file": "fonts/RedHatDisplayBold.ttf",
+    "weight": "700"
+   },
+   {
+    "family": "Red Hat Display",
+    "file": "fonts/RedHatDisplayExtraBold.ttf",
+    "weight": "800"
+   },
+   {
+    "family": "Red Hat Display",
+    "file": "fonts/RedHatDisplayBlack.ttf",
+    "weight": "900"
+   },
+   {
+    "family": "JetBrains Mono",
+    "file": "fonts/JetBrainsMono.ttf",
+    "weight": "400"
+   },
+   {
+    "family": "JetBrains Mono",
+    "file": "fonts/JetBrainsMonoMedium.ttf",
+    "weight": "500"
+   }
+  ],
+  "families": {
+   "display": "\"Red Hat Display\", system-ui, sans-serif",
+   "mono": "\"JetBrains Mono\", ui-monospace, monospace"
+  },
+  "groups": [
+   {
+    "name": "Titles",
+    "family": "display",
+    "styles": [
+     {
+      "name": "title-cover",
+      "fontSize": "54px",
+      "lineHeight": 1.05,
+      "fontWeight": 900,
+      "letterSpacing": "-1px",
+      "sample": "Loomit results, at a glance",
+      "usage": "Cover title, white on dark. Black 900, shrinks to fit one line."
+     },
+     {
+      "name": "title-closing",
+      "fontSize": "52px",
+      "lineHeight": 1.05,
+      "fontWeight": 900,
+      "letterSpacing": "-1px",
+      "sample": "Thanks for watching.",
+      "usage": "Closing slide title."
+     },
+     {
+      "name": "title-statement",
+      "fontSize": "48px",
+      "lineHeight": 1.12,
+      "fontWeight": 900,
+      "letterSpacing": "-1px",
+      "sample": "From one setup per app to twelve tuned segments per app.",
+      "usage": "Statement / section slide; a few words may be mint. About 70 characters max."
+     },
+     {
+      "name": "title",
+      "fontSize": "32px",
+      "lineHeight": 1.15,
+      "fontWeight": 900,
+      "letterSpacing": "-0.6px",
+      "sample": "Revenue grew while ad time went down",
+      "usage": "Every content slide title: one line, about 50 characters. Never swap Black for a lighter weight."
+     },
+     {
+      "name": "title-split",
+      "fontSize": "30px",
+      "lineHeight": 1.15,
+      "fontWeight": 900,
+      "letterSpacing": "-0.6px",
+      "sample": "Knowing what to try next is the hard part",
+      "usage": "Title on the right of the split-panel slide (may take two lines)."
+     }
+    ]
+   },
+   {
+    "name": "Numbers",
+    "family": "display",
+    "styles": [
+     {
+      "name": "number-hero",
+      "fontSize": "168px",
+      "lineHeight": 0.9,
+      "fontWeight": 800,
+      "letterSpacing": "-6px",
+      "sample": "+38%",
+      "usage": "The one huge result on the hero-number slide (unit at 96px). Brand teal."
+     },
+     {
+      "name": "number-xl",
+      "fontSize": "132px",
+      "lineHeight": 0.9,
+      "fontWeight": 800,
+      "letterSpacing": "-5px",
+      "sample": "3.2×",
+      "usage": "Mint number on the teal split panel."
+     },
+     {
+      "name": "number-kpi",
+      "fontSize": "120px",
+      "lineHeight": 0.95,
+      "fontWeight": 800,
+      "letterSpacing": "-4px",
+      "sample": "+38%",
+      "usage": "Lime hero value in the dark KPI trio."
+     },
+     {
+      "name": "number-ba",
+      "fontSize": "84px",
+      "lineHeight": 1,
+      "fontWeight": 800,
+      "letterSpacing": "-3px",
+      "sample": "$0.21",
+      "usage": "Before / after values."
+     },
+     {
+      "name": "number-lg",
+      "fontSize": "64px",
+      "lineHeight": 1,
+      "fontWeight": 800,
+      "letterSpacing": "-2px",
+      "sample": "$0.21",
+      "usage": "Secondary KPIs on dark, side stats (60), callout value (56)."
+     },
+     {
+      "name": "number-md",
+      "fontSize": "46px",
+      "lineHeight": 1,
+      "fontWeight": 800,
+      "letterSpacing": "-1.5px",
+      "sample": "+$52K",
+      "usage": "KPI card values, hero-number stats (44), split-panel rows (40)."
+     }
+    ]
+   },
+   {
+    "name": "Text",
+    "family": "display",
+    "styles": [
+     {
+      "name": "lead",
+      "fontSize": "18px",
+      "lineHeight": 1.35,
+      "fontWeight": 400,
+      "letterSpacing": "0",
+      "sample": "Big numbers, cards, charts and tables for client decks.",
+      "usage": "Cover, statement and closing subtitle; also the split-panel caption."
+     },
+     {
+      "name": "subtitle",
+      "fontSize": "16px",
+      "lineHeight": 1.35,
+      "fontWeight": 400,
+      "letterSpacing": "0",
+      "sample": "The backlog is not the problem. Getting through it is.",
+      "usage": "One line under a content title."
+     },
+     {
+      "name": "card-title",
+      "fontSize": "16px",
+      "lineHeight": 1.3,
+      "fontWeight": 600,
+      "letterSpacing": "0",
+      "sample": "Floors by cohort",
+      "usage": "Card titles (≤35 characters), KPI card names (15), table app names (14)."
+     },
+     {
+      "name": "takeaway",
+      "fontSize": "14px",
+      "lineHeight": 1.35,
+      "fontWeight": 500,
+      "letterSpacing": "0",
+      "sample": "Run in house, a single change can take months.",
+      "usage": "The one-line takeaway, brand teal on light."
+     },
+     {
+      "name": "body",
+      "fontSize": "13.5px",
+      "lineHeight": 1.4,
+      "fontWeight": 400,
+      "letterSpacing": "0",
+      "sample": "Still in the backlog after two quarters.",
+      "usage": "Card body (≤90 characters), captions (14–15)."
+     }
+    ]
+   },
+   {
+    "name": "Mono",
+    "family": "mono",
+    "styles": [
+     {
+      "name": "eyebrow",
+      "fontSize": "11px",
+      "lineHeight": 1.3,
+      "fontWeight": 400,
+      "letterSpacing": "1.2px",
+      "sample": "RESULTS · FIRST 60 DAYS",
+      "usage": "Eyebrow above every title. Uppercase, eyebrow colour."
+     },
+     {
+      "name": "table-number",
+      "fontSize": "13px",
+      "lineHeight": 1.3,
+      "fontWeight": 400,
+      "letterSpacing": "0",
+      "sample": "$14.20",
+      "usage": "Numbers in table cells, right aligned, ink."
+     },
+     {
+      "name": "pill",
+      "fontSize": "10.5px",
+      "lineHeight": 1,
+      "fontWeight": 400,
+      "letterSpacing": "0",
+      "sample": "+18.2%",
+      "usage": "Pills and page numbers ('04 / 13')."
+     },
+     {
+      "name": "label",
+      "fontSize": "10px",
+      "lineHeight": 1.3,
+      "fontWeight": 400,
+      "letterSpacing": "1.1px",
+      "sample": "ARPDAU",
+      "usage": "Labels in cards, table headers, chart axes. Uppercase."
+     },
+     {
+      "name": "micro",
+      "fontSize": "8.5px",
+      "lineHeight": 1.3,
+      "fontWeight": 400,
+      "letterSpacing": "1px",
+      "sample": "SAMPLE DATA",
+      "usage": "The SAMPLE DATA tag and KPI-card notes. Uppercase."
+     }
+    ]
+   }
+  ]
+ },
+ "spacing": {
+  "tokens": [
+   {
+    "name": "canvas-w",
+    "value": "960px",
+    "usage": "Slide width. 1px here = 1pt in PowerPoint (13.333 in wide slide)."
+   },
+   {
+    "name": "canvas-h",
+    "value": "540px",
+    "usage": "Slide height (7.5 in)."
+   },
+   {
+    "name": "margin",
+    "value": "64px",
+    "usage": "Left margin (0.889 in) — eyebrows, titles, logo, content all start here."
+   },
+   {
+    "name": "margin-right",
+    "value": "56.7px",
+    "usage": "Right margin (content ends at 12.546 in = 903.3px)."
+   },
+   {
+    "name": "content-w",
+    "value": "839.3px",
+    "usage": "Content width between the margins."
+   },
+   {
+    "name": "eyebrow-y",
+    "value": "64px",
+    "usage": "Eyebrow top on content slides."
+   },
+   {
+    "name": "title-y",
+    "value": "92px",
+    "usage": "Title top on content slides (1.28 in)."
+   },
+   {
+    "name": "subtitle-y",
+    "value": "145px",
+    "usage": "Subtitle top (2.02 in)."
+   },
+   {
+    "name": "content-y",
+    "value": "158px",
+    "usage": "Content starts here (2.2 in); 212px when there is a subtitle."
+   },
+   {
+    "name": "content-bottom",
+    "value": "450px",
+    "usage": "Nothing below this line (6.25 in) except logo, page number and the sample tag."
+   },
+   {
+    "name": "footer-y",
+    "value": "495px",
+    "usage": "Footer logo top (6.875 in); page number at 491px."
+   },
+   {
+    "name": "gap",
+    "value": "16.5px",
+    "usage": "Gap between cards (0.23 in)."
+   },
+   {
+    "name": "card-pad",
+    "value": "21.6px",
+    "usage": "Padding inside cards (0.3 in)."
+   },
+   {
+    "name": "rule-w",
+    "value": "36px",
+    "usage": "Mint rule under dark titles (0.5 in)."
+   },
+   {
+    "name": "rule-h",
+    "value": "2px",
+    "usage": "Mint rule height."
+   },
+   {
+    "name": "pill-h",
+    "value": "21.6px",
+    "usage": "Pill height (0.3 in)."
+   },
+   {
+    "name": "logo-w",
+    "value": "60px",
+    "usage": "Footer logo width (0.833 in); 16px tall."
+   },
+   {
+    "name": "logo-cover-w",
+    "value": "100px",
+    "usage": "Cover logo width (1.389 in), top-left at y 52px; 27px tall."
+   },
+   {
+    "name": "split-panel-w",
+    "value": "374.4px",
+    "usage": "Width of the teal panel on the split-panel slide (5.2 in)."
+   }
+  ]
+ },
+ "radius": {
+  "tokens": [
+   {
+    "name": "radius-card",
+    "value": "32px",
+    "usage": "Every card: glass, brand, dark glass, dark hero, recording placeholder."
+   },
+   {
+    "name": "radius-chip",
+    "value": "14px",
+    "usage": "Small glass chips."
+   },
+   {
+    "name": "radius-pill",
+    "value": "999px",
+    "usage": "Pills, share bars, dots."
+   }
+  ]
+ },
+ "shadow": {
+  "tokens": [
+   {
+    "name": "shadow-glass",
+    "value": "inset 0 1.5px 0 rgba(255,255,255,1), 0 8px 28px rgba(1,50,64,0.15)",
+    "usage": "White glass card on light: inner top highlight plus a soft teal shadow."
+   },
+   {
+    "name": "shadow-chip",
+    "value": "inset 0 1.5px 0 rgba(255,255,255,1), 0 6px 20px rgba(1,50,64,0.12)",
+    "usage": "Glass chip."
+   },
+   {
+    "name": "shadow-brand",
+    "value": "inset 0 1.5px 0 rgba(255,255,255,0.3), 0 12px 32px rgba(1,50,64,0.26)",
+    "usage": "Brand (teal) highlight card."
+   },
+   {
+    "name": "shadow-darkglass",
+    "value": "inset 0 1.5px 0 rgba(255,255,255,0.25), 0 12px 32px rgba(0,26,33,0.25)",
+    "usage": "Translucent card on a dark slide."
+   },
+   {
+    "name": "shadow-darkhero",
+    "value": "inset 0 1.5px 0 rgba(255,255,255,0.3), 0 14px 36px rgba(0,26,33,0.3)",
+    "usage": "Mint-tinted hero card on a dark slide."
+   }
+  ]
+ },
+ "gradient": {
+  "tokens": [
+   {
+    "name": "gradient-glass",
+    "value": "linear-gradient(180deg, #ffffff 0%, rgba(255,255,255,0.95) 100%)",
+    "usage": "Glass card fill."
+   },
+   {
+    "name": "gradient-edge-glass",
+    "value": "linear-gradient(180deg, #e3eaec 0%, #bcc9ce 100%)",
+    "usage": "Glass card 1px edge."
+   },
+   {
+    "name": "gradient-brand",
+    "value": "linear-gradient(145deg, #035c74 0%, #013240 100%)",
+    "usage": "Brand highlight card fill (one per slide)."
+   },
+   {
+    "name": "gradient-edge-brand",
+    "value": "linear-gradient(145deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.12) 100%)",
+    "usage": "Brand card edge."
+   },
+   {
+    "name": "gradient-darkglass",
+    "value": "linear-gradient(180deg, rgba(255,255,255,0.13) 0%, rgba(255,255,255,0.05) 100%)",
+    "usage": "Dark glass card fill."
+   },
+   {
+    "name": "gradient-edge-darkglass",
+    "value": "linear-gradient(180deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.18) 100%)",
+    "usage": "Dark glass card edge."
+   },
+   {
+    "name": "gradient-darkhero",
+    "value": "linear-gradient(135deg, rgba(0,255,182,0.16) 0%, rgba(255,255,255,0.04) 100%)",
+    "usage": "Dark hero card fill (mint tint)."
+   },
+   {
+    "name": "gradient-edge-darkhero",
+    "value": "linear-gradient(135deg, rgba(0,255,182,0.7) 0%, rgba(255,255,255,0.15) 100%)",
+    "usage": "Dark hero card edge."
+   },
+   {
+    "name": "gradient-rec",
+    "value": "linear-gradient(180deg, rgba(255,255,255,0.52) 0%, rgba(255,255,255,0.24) 100%)",
+    "usage": "Screen-recording placeholder fill (dotted rec-edge border)."
+   },
+   {
+    "name": "gradient-panel",
+    "value": "linear-gradient(145deg, #035c74 0%, #012a36 100%)",
+    "usage": "Full-height teal panel of the split-panel slide."
+   },
+   {
+    "name": "gradient-dark-slide",
+    "value": "linear-gradient(160deg, #01495c 0%, #013e4e 50%, #002a36 100%)",
+    "usage": "Fallback for the bg-dark image where images can't be used."
+   }
+  ]
+ }
+}

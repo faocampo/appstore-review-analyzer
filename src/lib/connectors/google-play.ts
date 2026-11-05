@@ -1,6 +1,13 @@
 import { z } from "zod";
 
+import { getGooglePlayAccessToken } from "@/lib/credentials/google";
+import { envInteger } from "@/lib/env";
+import { upstreamError } from "@/lib/errors";
+import type { ConnectorResult } from "@/lib/connectors/types";
 import type { Review } from "@/lib/types";
+
+/** Google documents the Reviews API as covering roughly the last week. */
+export const GOOGLE_REVIEW_API_WINDOW_DAYS = 7;
 
 const timestampSchema = z.object({
   seconds: z.union([z.string(), z.number()]),
@@ -32,41 +39,35 @@ const googleResponseSchema = z.object({
     .optional(),
 });
 
-function maxPages(): number {
-  const parsed = Number.parseInt(process.env.GOOGLE_PLAY_MAX_PAGES ?? "10", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 50) : 10;
-}
-
 function googleTimestamp(value: z.infer<typeof timestampSchema>): string {
   return new Date(Number(value.seconds) * 1000).toISOString();
 }
 
+/**
+ * Fetches commented reviews from the Google Play Reviews API.
+ *
+ * Reviews are always fetched in their original language: classification
+ * must not depend on machine translation, which only one store offers.
+ * The API exposes a last-modified timestamp, so period membership uses it.
+ */
 export async function fetchGooglePlayReviews(options: {
   packageName: string;
-  translationLanguage?: string;
-}): Promise<Review[]> {
-  const accessToken = process.env.GOOGLE_PLAY_ACCESS_TOKEN;
-  if (!accessToken || accessToken.endsWith("_placeholder")) {
-    throw new Error(
-      "Google Play is selected but GOOGLE_PLAY_ACCESS_TOKEN is not configured.",
-    );
-  }
+  startDate?: string;
+  now?: number;
+}): Promise<ConnectorResult> {
+  const accessToken = await getGooglePlayAccessToken();
+  const maxPages = envInteger("GOOGLE_PLAY_MAX_PAGES", 10, { min: 1, max: 50 });
 
   const reviews: Review[] = [];
   let pageToken: string | undefined;
+  let pagesFetched = 0;
 
-  for (let page = 0; page < maxPages(); page += 1) {
+  for (let page = 0; page < maxPages; page += 1) {
     const url = new URL(
       `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(options.packageName)}/reviews`,
     );
     url.searchParams.set("maxResults", "100");
     if (pageToken) url.searchParams.set("token", pageToken);
-    if (options.translationLanguage) {
-      url.searchParams.set(
-        "translationLanguage",
-        options.translationLanguage,
-      );
-    }
 
     const response = await fetch(url, {
       headers: {
@@ -76,14 +77,10 @@ export async function fetchGooglePlayReviews(options: {
       cache: "no-store",
     });
 
-    if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(
-        `Google Play returned ${response.status}: ${detail.slice(0, 300)}`,
-      );
-    }
+    if (!response.ok) throw await upstreamError("Google Play", response);
 
     const payload = googleResponseSchema.parse(await response.json());
+    pagesFetched += 1;
     for (const item of payload.reviews ?? []) {
       const comment = item.comments
         .map((entry) => entry.userComment)
@@ -111,5 +108,36 @@ export async function fetchGooglePlayReviews(options: {
     if (!pageToken) break;
   }
 
-  return reviews;
+  const truncated = Boolean(pageToken);
+  const windowStart =
+    (options.now ?? Date.now()) - GOOGLE_REVIEW_API_WINDOW_DAYS * 86_400_000;
+  const beforeWindow = options.startDate
+    ? new Date(`${options.startDate}T00:00:00.000Z`).getTime() < windowStart
+    : false;
+
+  const notes: string[] = [];
+  if (truncated) {
+    notes.push(
+      `Stopped at the ${maxPages}-page limit with more reviews available.`,
+    );
+  }
+  if (beforeWindow) {
+    notes.push(
+      `The Reviews API only covers about the last ${GOOGLE_REVIEW_API_WINDOW_DAYS} days; earlier days in this period are not covered. Import a Play Console reviews report for history.`,
+    );
+  }
+
+  return {
+    reviews,
+    coverage: {
+      source: "google_play_api",
+      label: "Google Play API",
+      status: truncated || beforeWindow ? "partial" : "complete",
+      reviewsFetched: reviews.length,
+      pagesFetched,
+      truncated,
+      dateSemantics: "last_modified_fallback",
+      note: notes.join(" ") || undefined,
+    },
+  };
 }

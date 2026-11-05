@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyMock } from "@/lib/mock-classifier";
+import { classifyMock, createMockClassifier } from "@/lib/classifiers/mock";
 import type { ReasonKey, Review } from "@/lib/types";
 
 function review(rating: number, title: string, body: string): Review {
@@ -55,11 +55,25 @@ describe("classifyMock", () => {
     expect(result.primaryReason).toBe(reason);
     expect(result.sentimentConfidence).toBeGreaterThan(0.7);
     expect(
-      Object.values(result.sentimentProbabilities).reduce(
+      Object.values(result.sentimentProbabilities ?? {}).reduce(
         (sum, value) => sum + value,
         0,
       ),
     ).toBeCloseTo(1);
-    expect(result.reasonProbabilities[reason]).toBe(0.75);
+    expect(result.reasonProbabilities?.[reason]).toBe(0.75);
+    expect(result.sentimentEstimator).toBe("probability_weighted");
+    expect(result.provider).toBe("mock");
+  });
+
+  it("exposes a provider that classifies every review", async () => {
+    const provider = createMockClassifier();
+    const outcomes = await provider.classify([
+      review(5, "Great", "Love it"),
+      review(1, "Bad", "broken"),
+    ]);
+
+    expect(provider.info.model).toBe("mock-rules-v1");
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.every((outcome) => outcome.ok)).toBe(true);
   });
 });

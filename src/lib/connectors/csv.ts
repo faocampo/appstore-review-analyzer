@@ -1,5 +1,6 @@
 import Papa from "papaparse";
 
+import { PublicError } from "@/lib/errors";
 import type { Platform, Review } from "@/lib/types";
 
 type CsvRow = Record<string, string>;
@@ -105,20 +106,65 @@ function parseIosRow(row: CsvRow, index: number, fileName: string): Review | nul
   };
 }
 
+export type CsvEncoding = "text" | "base64";
+
+function swapBytePairs(bytes: Uint8Array): Uint8Array {
+  const swapped = new Uint8Array(bytes.length - (bytes.length % 2));
+  for (let index = 0; index < swapped.length; index += 2) {
+    swapped[index] = bytes[index + 1];
+    swapped[index + 1] = bytes[index];
+  }
+  return swapped;
+}
+
+/**
+ * Decodes an uploaded CSV. Play Console reviews reports are UTF-16 encoded,
+ * so raw bytes (sent as base64) are decoded by BOM: UTF-16 LE, UTF-16 BE or
+ * UTF-8. Without a BOM, a high share of NUL bytes signals BOM-less UTF-16 LE.
+ */
+export function decodeCsvContent(
+  content: string,
+  encoding: CsvEncoding = "text",
+): string {
+  if (encoding === "text") return content.replace(/^\uFEFF/, "");
+
+  const bytes = Uint8Array.from(Buffer.from(content, "base64"));
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return new TextDecoder("utf-16le").decode(bytes.subarray(2));
+  }
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return new TextDecoder("utf-16le").decode(swapBytePairs(bytes.subarray(2)));
+  }
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return new TextDecoder("utf-8").decode(bytes.subarray(3));
+  }
+
+  const sample = bytes.subarray(0, 512);
+  const oddNulls = sample.filter((byte, index) => index % 2 === 1 && byte === 0)
+    .length;
+  if (sample.length >= 4 && oddNulls / (sample.length / 2) > 0.3) {
+    return new TextDecoder("utf-16le").decode(bytes);
+  }
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
 export function parseReviewCsv(options: {
   content: string;
+  encoding?: CsvEncoding;
   platform: Platform;
   fileName: string;
 }): { reviews: Review[]; skippedRows: number } {
-  const parsed = Papa.parse<CsvRow>(options.content, {
+  const content = decodeCsvContent(options.content, options.encoding);
+  const parsed = Papa.parse<CsvRow>(content, {
     header: true,
     skipEmptyLines: "greedy",
     transformHeader: normalizeKey,
   });
 
   if (parsed.errors.length && !parsed.data.length) {
-    throw new Error(
+    throw new PublicError(
       `Could not parse ${options.fileName}: ${parsed.errors[0]?.message ?? "invalid CSV"}.`,
+      400,
     );
   }
 

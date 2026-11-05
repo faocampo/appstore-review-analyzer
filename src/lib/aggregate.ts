@@ -1,13 +1,17 @@
+import type { ClassifierInfo } from "@/lib/classifiers/provider";
+import { PublicError } from "@/lib/errors";
 import {
   REASON_DEFINITIONS,
   SENTIMENT_LABELS,
-  type AnalysisMode,
   type AnalysisResult,
   type AnalyzedReview,
+  type PeriodMembership,
   type ReasonKey,
   type ReasonSummary,
+  type SentimentEstimator,
   type SentimentGroup,
   type SentimentLabel,
+  type SourceCoverage,
   type SourceMode,
 } from "@/lib/types";
 
@@ -47,15 +51,30 @@ function summarizeReasons(
     .slice(0, 5);
 }
 
+function periodMembership(reviews: AnalyzedReview[]): PeriodMembership {
+  const semantics = new Set(reviews.map((review) => review.dateSemantics));
+  if (semantics.size > 1) return "mixed";
+  return semantics.has("last_modified_fallback") ? "last_modified" : "created_at";
+}
+
+function sentimentEstimator(reviews: AnalyzedReview[]): SentimentEstimator {
+  const estimators = new Set(
+    reviews.map((review) => review.analysis.sentimentEstimator),
+  );
+  if (estimators.size > 1) return "mixed";
+  return estimators.has("provider_score") ? "provider_score" : "probability_weighted";
+}
+
 export function aggregateReviews(options: {
   appName: string;
   sourceMode: SourceMode;
-  analysisMode: AnalysisMode;
-  model: string;
+  classifier: ClassifierInfo;
   startDate: string;
   endDate: string;
   lastN: number;
   reviews: AnalyzedReview[];
+  unclassified?: number;
+  coverage?: SourceCoverage[];
   notices?: string[];
 }): AnalysisResult {
   const periodStart = new Date(`${options.startDate}T00:00:00.000Z`).getTime();
@@ -72,7 +91,10 @@ export function aggregateReviews(options: {
     );
 
   if (!inPeriod.length) {
-    throw new Error("No written reviews were found in the selected period.");
+    throw new PublicError(
+      "No written reviews were found in the selected period.",
+      422,
+    );
   }
 
   const reviewCount = inPeriod.length;
@@ -103,16 +125,24 @@ export function aggregateReviews(options: {
   return {
     appName: options.appName,
     sourceMode: options.sourceMode,
-    analysisMode: options.analysisMode,
-    model: options.model,
+    analysisMode: options.classifier.provider,
+    model: inPeriod[0].analysis.model,
+    classifier: {
+      provider: options.classifier.provider,
+      model: inPeriod[0].analysis.model,
+      promptVersion: options.classifier.promptVersion,
+      taxonomyVersion: options.classifier.taxonomyVersion,
+    },
     period: {
       startDate: options.startDate,
       endDate: options.endDate,
-      membership: "created_at",
+      membership: periodMembership(inPeriod),
     },
     metrics: {
       reviewsAnalyzed: reviewCount,
+      reviewsUnclassified: options.unclassified ?? 0,
       averageSentiment: round(averageSentiment),
+      sentimentEstimator: sentimentEstimator(inPeriod),
       averageRating: round(averageRating),
       averageConfidence: round(averageConfidence),
       androidReviews: inPeriod.filter((review) => review.platform === "android")
@@ -120,6 +150,7 @@ export function aggregateReviews(options: {
       iosReviews: inPeriod.filter((review) => review.platform === "ios").length,
     },
     sentimentDistribution,
+    coverage: options.coverage ?? [],
     reasons: {
       negative: summarizeReasons(inPeriod, "negative"),
       neutral: summarizeReasons(inPeriod, "neutral"),
@@ -128,6 +159,11 @@ export function aggregateReviews(options: {
     reviews: inPeriod.slice(0, options.lastN),
     notices: [
       "Average rating is calculated from written reviews only; star-only ratings require a separate store ratings export.",
+      ...(periodMembership(inPeriod) === "created_at"
+        ? []
+        : [
+            "Google Play API reviews are placed in the period by their last-modified date, because the API does not expose the creation date.",
+          ]),
       ...new Set(options.notices ?? []),
     ],
   };

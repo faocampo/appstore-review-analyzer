@@ -10,10 +10,12 @@
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "tokens": "node scripts/generate-loomit-tokens.mjs"
   },
   "dependencies": {
-    "lucide-react": "1.44.0",
+    "google-auth-library": "11.3.3",
+    "jose": "6.2.15",
     "next": "16.3.4",
     "papaparse": "5.5.3",
     "react": "19.2.4",
