@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 
 import { envInteger } from "@/lib/env";
 
@@ -6,8 +6,14 @@ export type AccessDecision =
   | { allowed: true }
   | { allowed: false; status: 401 | 503; error: string };
 
-function digest(value: string): Buffer {
-  return createHash("sha256").update(value).digest();
+/**
+ * Constant-time comparison for equal-length inputs. Only the token length can
+ * leak through timing, which is acceptable for a long random shared token.
+ */
+function tokensMatch(provided: string, expected: string): boolean {
+  const left = Buffer.from(provided, "utf8");
+  const right = Buffer.from(expected, "utf8");
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 /**
@@ -34,7 +40,7 @@ export function authorizeRequest(request: Request): AccessDecision {
 
   const header = request.headers.get("authorization") ?? "";
   const match = /^Bearer\s+(.+)$/i.exec(header.trim());
-  if (match && timingSafeEqual(digest(match[1].trim()), digest(expected))) {
+  if (match && tokensMatch(match[1].trim(), expected)) {
     return { allowed: true };
   }
 

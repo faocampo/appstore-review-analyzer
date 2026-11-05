@@ -26,6 +26,7 @@ describe("authorizeRequest", () => {
     expect(authorizeRequest(request({ Authorization: "Bearer s3cret" }))).toEqual({ allowed: true });
     expect(authorizeRequest(request({ Authorization: "bearer  s3cret " }))).toEqual({ allowed: true });
     expect(authorizeRequest(request({ Authorization: "Bearer wrong" }))).toMatchObject({ allowed: false, status: 401 });
+    expect(authorizeRequest(request({ Authorization: "Bearer s3cre7" }))).toMatchObject({ allowed: false, status: 401 });
     expect(authorizeRequest(request())).toMatchObject({ allowed: false, status: 401 });
   });
 });
