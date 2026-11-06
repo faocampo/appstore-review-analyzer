@@ -11,7 +11,15 @@ export type SentimentScore = 0 | 1 | 2 | 3 | 4;
 export type Store = "google_play" | "apple_app_store";
 export type Platform = "android" | "ios";
 export type SourceMode = "demo" | "live_api" | "csv";
-export type AnalysisMode = "mock" | "jev";
+export type ClassifierId = "mock" | "jev" | "openrouter";
+/** @deprecated Use ClassifierId. Kept for the /api/analyze response contract. */
+export type AnalysisMode = ClassifierId;
+export type DateSemantics = "created_at" | "last_modified_fallback";
+export type PeriodMembership = "created_at" | "last_modified" | "mixed";
+export type SentimentEstimator =
+  | "probability_weighted"
+  | "provider_score"
+  | "mixed";
 export type SentimentGroup = "negative" | "neutral" | "positive";
 
 export const REASON_DEFINITIONS = {
@@ -34,6 +42,23 @@ export const REASON_DEFINITIONS = {
 
 export type ReasonKey = keyof typeof REASON_DEFINITIONS;
 
+/**
+ * Taxonomy v2: what kind of ad complaint a review makes. Only set when the
+ * primary or secondary reason is `ads`. These map to levers Loomit controls
+ * (frequency, formats, rewarded delivery, ad quality).
+ */
+export const AD_SUBREASON_DEFINITIONS = {
+  ad_frequency: "Too many or too frequent ads",
+  ad_intrusive: "Intrusive or hard-to-close ads",
+  ad_inappropriate: "Inappropriate or offensive ad content",
+  ad_audio: "Ads with unexpected sound",
+  ad_reward_failure: "Rewarded ad did not grant the reward",
+  ad_breaks_app: "Ads that crash, freeze or break the app",
+  ad_other: "Other ad complaint",
+} as const;
+
+export type AdSubreasonKey = keyof typeof AD_SUBREASON_DEFINITIONS;
+
 export interface Review {
   id: string;
   store: Store;
@@ -46,20 +71,49 @@ export interface Review {
   appVersion?: string;
   createdAt: string;
   updatedAt?: string;
-  dateSemantics: "created_at" | "last_modified_fallback";
+  dateSemantics: DateSemantics;
   source: "demo" | "api" | "csv";
 }
 
 export interface Classification {
   sentimentScore: SentimentScore;
   sentimentLabel: SentimentLabel;
+  /**
+   * Expected sentiment on the 0–4 scale. Probability-weighted
+   * (sum of score × probability) when the provider returns a valid
+   * five-level distribution; otherwise the provider's own score.
+   */
   sentimentExpectedValue: number;
-  sentimentProbabilities: Record<SentimentLabel, number>;
+  sentimentEstimator: Exclude<SentimentEstimator, "mixed">;
+  sentimentProbabilities: Record<SentimentLabel, number> | null;
   sentimentConfidence: number;
   primaryReason: ReasonKey;
-  reasonProbabilities: Record<ReasonKey, number>;
+  /** Taxonomy v2: a second reason when the review clearly has two, else null. */
+  secondaryReason: ReasonKey | null;
+  /** Taxonomy v2: kind of ad complaint when a reason is `ads`, else null. */
+  adSubreason: AdSubreasonKey | null;
+  reasonProbabilities: Record<ReasonKey, number> | null;
   reasonConfidence: number;
+  /** Provider-reported cost attributed to this review, when known. */
+  costUsd: number | null;
+  provider: ClassifierId;
   model: string;
+  promptVersion: string;
+  taxonomyVersion: string;
+}
+
+export type CoverageStatus = "complete" | "partial" | "failed";
+
+export interface SourceCoverage {
+  source: "google_play_api" | "app_store_connect_api" | "csv" | "demo";
+  label: string;
+  status: CoverageStatus;
+  reviewsFetched: number;
+  pagesFetched?: number;
+  /** True when pagination stopped at the page limit with more data available. */
+  truncated: boolean;
+  dateSemantics: DateSemantics;
+  note?: string;
 }
 
 export interface AnalyzedReview extends Review {
@@ -78,12 +132,20 @@ export interface AnalyzeInput {
   csvFiles?: Array<{
     name: string;
     platform: Platform;
+    encoding?: "text" | "base64";
     content: string;
   }>;
 }
 
 export interface ReasonSummary {
   reason: ReasonKey;
+  label: string;
+  count: number;
+  share: number;
+}
+
+export interface AdSubreasonSummary {
+  subreason: AdSubreasonKey;
   label: string;
   count: number;
   share: number;
@@ -98,23 +160,34 @@ export interface SentimentDistributionItem {
 export interface AnalysisResult {
   appName: string;
   sourceMode: SourceMode;
-  analysisMode: AnalysisMode;
+  analysisMode: ClassifierId;
   model: string;
+  classifier: {
+    provider: ClassifierId;
+    model: string;
+    promptVersion: string;
+    taxonomyVersion: string;
+  };
   period: {
     startDate: string;
     endDate: string;
-    membership: "created_at";
+    membership: PeriodMembership;
   };
   metrics: {
     reviewsAnalyzed: number;
+    reviewsUnclassified: number;
     averageSentiment: number;
+    sentimentEstimator: SentimentEstimator;
     averageRating: number;
     averageConfidence: number;
     androidReviews: number;
     iosReviews: number;
   };
+  coverage: SourceCoverage[];
   sentimentDistribution: SentimentDistributionItem[];
   reasons: Record<SentimentGroup, ReasonSummary[]>;
+  /** Ad complaint breakdown among negative reviews that mention ads. */
+  adSubreasons: AdSubreasonSummary[];
   reviews: AnalyzedReview[];
   notices: string[];
 }

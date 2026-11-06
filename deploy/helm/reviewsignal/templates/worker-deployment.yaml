@@ -1,0 +1,87 @@
+{{- $worker := .Values.worker }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "reviewsignal.fullname" . }}-worker
+  labels:
+    {{- include "reviewsignal.componentLabels" (list . "worker") | nindent 4 }}
+spec:
+  replicas: {{ $worker.replicas }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "reviewsignal.componentSelectorLabels" (list . "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "reviewsignal.componentLabels" (list . "worker") | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with $worker.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- include "reviewsignal.podCommon" . | nindent 6 }}
+      terminationGracePeriodSeconds: {{ $worker.terminationGracePeriodSeconds }}
+      {{- include "reviewsignal.topologySpread" (list . "worker" $worker) | nindent 6 }}
+      containers:
+        - name: worker
+          image: {{ include "reviewsignal.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["node", "dist/server/worker.js"]
+          ports:
+            - name: metrics
+              containerPort: {{ $worker.metricsPort }}
+              protocol: TCP
+          env:
+            - name: METRICS_PORT
+              value: {{ $worker.metricsPort | quote }}
+            {{- range $name, $value := $worker.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "reviewsignal.configMapName" . }}
+            - secretRef:
+                name: {{ include "reviewsignal.secretName" . }}
+          startupProbe:
+            {{- toYaml $worker.probes.startup | nindent 12 }}
+          readinessProbe:
+            {{- toYaml $worker.probes.readiness | nindent 12 }}
+          livenessProbe:
+            {{- toYaml $worker.probes.liveness | nindent 12 }}
+          resources:
+            {{- toYaml $worker.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.tmpVolume.sizeLimit }}
+      {{- with $worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

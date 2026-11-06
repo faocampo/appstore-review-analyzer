@@ -1,0 +1,62 @@
+# Staging overlay. Deployed by the Argo CD Application "reviewsignal-staging"
+# (deploy/argocd/application.yaml) with automated sync.
+#
+# PLACEHOLDER values (account id 123456789012, *.loomit.example hosts, bucket
+# names) must be replaced with the real identifiers from the Loomit platform
+# team before the first sync. Empty required values make rendering fail with
+# a message naming the value.
+
+image:
+  # PLACEHOLDER: staging ECR repository.
+  repository: 123456789012.dkr.ecr.us-east-1.amazonaws.com/reviewsignal
+  # Written by CI on every merge to main (immutable git SHA tag).
+  tag: ""
+
+serviceAccount:
+  # PLACEHOLDER: IRSA role for staging.
+  irsaRoleArn: arn:aws:iam::123456789012:role/reviewsignal-staging
+
+config:
+  NODE_ENV: production
+  AUTH_MODE: oidc
+  # PLACEHOLDER: Loomit identity provider (staging).
+  OIDC_ISSUER: https://auth.staging.loomit.example/
+  OIDC_AUDIENCE: reviewsignal-api
+  OIDC_JWKS_URL: https://auth.staging.loomit.example/.well-known/jwks.json
+  # PLACEHOLDER: Loomit console origin (staging).
+  CORS_ORIGINS: https://console.staging.loomit.example
+  SECRET_STORE: aws
+  # ASSUMPTION: region not yet confirmed (see docs/legal/dpa-checklist.md).
+  AWS_REGION: us-east-1
+  SECRETS_PREFIX: reviewsignal/staging/
+  UPLOADS_BUCKET: x3m-reviewsignal-staging-uploads
+  EXPORT_BUCKET: x3m-reviewsignal-staging-export
+  # PLACEHOLDER: Loomit notification webhook (staging).
+  LOOMIT_NOTIFY_URL: https://loomit-backend.staging.loomit.example/internal/notifications/reviewsignal
+  CLASSIFIER_PROVIDER: openrouter
+  # Pinned model chosen at the M1 gate (docs/adr/0005-classifier-providers.md).
+  # Rendering fails until it is set.
+  OPENROUTER_MODEL: ""
+  OPENROUTER_ZDR: "true"
+  # Staging keeps Jev available for the M1 comparison and as fallback.
+  CLASSIFIER_FALLBACK_PROVIDER: jev
+
+externalSecrets:
+  # Runtime secret; deliberately outside SECRETS_PREFIX so the service's IAM
+  # role cannot read it.
+  remoteKey: reviewsignal-runtime/staging
+  keys:
+    - DATABASE_URL
+    - OPENROUTER_API_KEY
+    - TYPESAFE_API_KEY
+    - LOOMIT_NOTIFY_SECRET
+    - X3M_GOOGLE_SERVICE_ACCOUNT_JSON
+
+api:
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+
+worker:
+  replicas: 1

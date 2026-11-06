@@ -9,13 +9,18 @@ export const analyzeInputSchema = z
     lastN: z.number().int().min(1).max(200),
     androidPackage: z.string().trim().max(200).optional(),
     appleAppId: z.string().trim().max(200).optional(),
+    /** Accepted for compatibility; reviews are classified in their original language. */
     translationLanguage: z.string().trim().max(12).optional(),
     csvFiles: z
       .array(
         z.object({
           name: z.string().trim().min(1).max(255),
           platform: z.enum(["android", "ios"]),
-          content: z.string().min(1).max(8_000_000),
+          // "base64" carries the raw file bytes so UTF-16 Play Console
+          // reports can be decoded on the server. 8 MB of bytes is about
+          // 10.7M base64 characters.
+          encoding: z.enum(["text", "base64"]).default("text"),
+          content: z.string().min(1).max(11_000_000),
         }),
       )
       .max(6)

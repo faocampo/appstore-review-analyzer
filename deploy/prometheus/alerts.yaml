@@ -1,0 +1,525 @@
+# ReviewSignal recording and alerting rules (Prometheus Operator).
+#
+# Source of truth for alerts. The Helm chart ships a byte-for-byte copy at
+# deploy/helm/reviewsignal/files/alerts.yaml (deploy/scripts/sync-alerts.sh
+# copies it; `sync-alerts.sh --check` fails on drift). SLO definitions:
+# docs/operations/slo.md. Runbooks: docs/operations/runbooks.md, one section
+# per alert name.
+#
+# Conventions
+# - Metrics come from the API and worker ServiceMonitors; job names are
+#   reviewsignal-api and reviewsignal-worker (set by relabeling).
+# - Everything is aggregated by namespace, so one Prometheus can watch
+#   staging and production.
+# - DB-derived gauges (connections, coverage, queue depth) report the same
+#   value from every replica that exports them; rules take max() across pods
+#   before summing so replicas are not double-counted. This requires every
+#   exporting replica to hold current values: today the gauges are refreshed
+#   by one pg-boss job (refresh-gauges) on a single worker, so with several
+#   worker replicas the server must refresh them in each replica (or export
+#   them from one place only).
+# - Label values as emitted by src/server (metrics.ts and callers):
+#   ingestion status succeeded|failed; classifier outcome ok|failed, counted
+#   per review; job outcome completed|failed; alert delivery outcome
+#   delivered|failed|not_configured; HTTP status is the numeric code as a
+#   string and route the Fastify route pattern (e.g.
+#   /v1/apps/:appId/timeseries, "unmatched" for 404s). The request-duration
+#   histogram has a bucket boundary at 0.5 s.
+# - reviewsignal_ingestion_rate_limited_total counts runs that ended on a 429,
+#   so it is compared with ingestion runs, not pages.
+# - severity: critical pages the on-call; warning opens a ticket for the next
+#   business day; info is dashboard-only.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: reviewsignal
+  labels:
+    app.kubernetes.io/name: reviewsignal
+    app.kubernetes.io/part-of: loomit
+    release: kube-prometheus-stack
+spec:
+  groups:
+    # -----------------------------------------------------------------------
+    # Recording rules
+    # -----------------------------------------------------------------------
+    - name: reviewsignal.recording.api
+      rules:
+        # Availability SLI: share of /v1 responses that are 5xx.
+        - record: reviewsignal:api_v1_error_ratio:rate5m
+          expr: |
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*", status=~"5.."}[5m]))
+            /
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*"}[5m]))
+        - record: reviewsignal:api_v1_error_ratio:rate30m
+          expr: |
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*", status=~"5.."}[30m]))
+            /
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*"}[30m]))
+        - record: reviewsignal:api_v1_error_ratio:rate1h
+          expr: |
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*", status=~"5.."}[1h]))
+            /
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*"}[1h]))
+        - record: reviewsignal:api_v1_error_ratio:rate2h
+          expr: |
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*", status=~"5.."}[2h]))
+            /
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*"}[2h]))
+        - record: reviewsignal:api_v1_error_ratio:rate6h
+          expr: |
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*", status=~"5.."}[6h]))
+            /
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*"}[6h]))
+        - record: reviewsignal:api_v1_error_ratio:rate1d
+          expr: |
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*", status=~"5.."}[1d]))
+            /
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*"}[1d]))
+        - record: reviewsignal:api_v1_error_ratio:rate3d
+          expr: |
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*", status=~"5.."}[3d]))
+            /
+            sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*"}[3d]))
+        # Latency SLI: /v1 reads (GET, excluding /v1/admin).
+        - record: reviewsignal:api_v1_read_latency_seconds:p95_5m
+          expr: |
+            histogram_quantile(0.95,
+              sum by (namespace, le) (rate(reviewsignal_http_request_duration_seconds_bucket{route=~"/v1/.*", route!~"/v1/admin/.*", method="GET"}[5m])))
+        - record: reviewsignal:api_v1_read_latency_seconds:p95_5m_by_route
+          expr: |
+            histogram_quantile(0.95,
+              sum by (namespace, route, le) (rate(reviewsignal_http_request_duration_seconds_bucket{route=~"/v1/.*", route!~"/v1/admin/.*", method="GET"}[5m])))
+        - record: reviewsignal:api_v1_read_fast_ratio:rate5m
+          expr: |
+            sum by (namespace) (rate(reviewsignal_http_request_duration_seconds_bucket{route=~"/v1/.*", route!~"/v1/admin/.*", method="GET", le="0.5"}[5m]))
+            /
+            sum by (namespace) (rate(reviewsignal_http_request_duration_seconds_count{route=~"/v1/.*", route!~"/v1/admin/.*", method="GET"}[5m]))
+
+    - name: reviewsignal.recording.ingestion
+      rules:
+        - record: reviewsignal:connections_active:count
+          expr: |
+            sum by (namespace) (max by (namespace, store) (reviewsignal_connections{status="active"}))
+        - record: reviewsignal:connections_stale:count
+          expr: |
+            sum by (namespace) (max by (namespace, store) (reviewsignal_connections_stale))
+        # Freshness SLI: share of active connections synced in the last 6 h.
+        - record: reviewsignal:ingestion_freshness:ratio
+          expr: |
+            1 - (reviewsignal:connections_stale:count / clamp_min(reviewsignal:connections_active:count, 1))
+        - record: reviewsignal:coverage_complete:ratio30d
+          expr: |
+            sum by (namespace) (max by (namespace, status) (reviewsignal_coverage_days{status="complete"}))
+            /
+            clamp_min(sum by (namespace) (max by (namespace, status) (reviewsignal_coverage_days)), 1)
+
+    - name: reviewsignal.recording.classifier
+      rules:
+        - record: reviewsignal:classifier_failure_ratio:rate15m
+          expr: |
+            sum by (namespace, provider) (rate(reviewsignal_classifier_requests_total{outcome!="ok"}[15m]))
+            /
+            sum by (namespace, provider) (rate(reviewsignal_classifier_requests_total[15m]))
+        - record: reviewsignal:classifier_latency_seconds:p95_15m
+          expr: |
+            histogram_quantile(0.95,
+              sum by (namespace, provider, le) (rate(reviewsignal_classifier_latency_seconds_bucket[15m])))
+        - record: reviewsignal:classifier_cost_usd:increase1d
+          expr: |
+            sum by (namespace, provider) (increase(reviewsignal_classifier_cost_usd_total[1d]))
+        # Classification cost per 1,000 successfully classified reviews.
+        - record: reviewsignal:classifier_cost_usd_per_1k_reviews:1d
+          expr: |
+            1000 * reviewsignal:classifier_cost_usd:increase1d
+            /
+            sum by (namespace, provider) (increase(reviewsignal_classifier_requests_total{outcome="ok"}[1d]))
+
+    # -----------------------------------------------------------------------
+    # API
+    # -----------------------------------------------------------------------
+    - name: reviewsignal.api
+      rules:
+        # Multi-window, multi-burn-rate alerts on the 99.5% availability SLO
+        # (error budget 0.5%). 14.4x for 1 h or 6x for 6 h spends 2% or 5% of a
+        # 30-day budget respectively.
+        - alert: ReviewSignalApiAvailabilityFastBurn
+          expr: |
+            (
+              reviewsignal:api_v1_error_ratio:rate1h > (14.4 * 0.005)
+              and
+              reviewsignal:api_v1_error_ratio:rate5m > (14.4 * 0.005)
+            )
+            or
+            (
+              reviewsignal:api_v1_error_ratio:rate6h > (6 * 0.005)
+              and
+              reviewsignal:api_v1_error_ratio:rate30m > (6 * 0.005)
+            )
+          for: 2m
+          labels:
+            severity: critical
+            team: reviewsignal
+            component: api
+            slo: api-availability
+          annotations:
+            summary: "ReviewSignal API is burning its availability error budget fast"
+            description: "{{ $labels.namespace }}: /v1 5xx ratio is {{ $value | humanizePercentage }} (SLO 99.5%)."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalapiavailabilityfastburn
+
+        - alert: ReviewSignalApiAvailabilitySlowBurn
+          expr: |
+            (
+              reviewsignal:api_v1_error_ratio:rate1d > (3 * 0.005)
+              and
+              reviewsignal:api_v1_error_ratio:rate2h > (3 * 0.005)
+            )
+            or
+            (
+              reviewsignal:api_v1_error_ratio:rate3d > 0.005
+              and
+              reviewsignal:api_v1_error_ratio:rate6h > 0.005
+            )
+          for: 15m
+          labels:
+            severity: warning
+            team: reviewsignal
+            component: api
+            slo: api-availability
+          annotations:
+            summary: "ReviewSignal API is steadily consuming its availability error budget"
+            description: "{{ $labels.namespace }}: /v1 5xx ratio is {{ $value | humanizePercentage }} (SLO 99.5%)."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalapiavailabilityslowburn
+
+        - alert: ReviewSignalApiLatencyHigh
+          expr: reviewsignal:api_v1_read_latency_seconds:p95_5m > 0.5
+          for: 15m
+          labels:
+            severity: warning
+            team: reviewsignal
+            component: api
+            slo: api-latency
+          annotations:
+            summary: "ReviewSignal /v1 read p95 latency is above 500 ms"
+            description: "{{ $labels.namespace }}: p95 of GET /v1 is {{ $value | humanizeDuration }} (objective < 500 ms)."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalapilatencyhigh
+
+        - alert: ReviewSignalApiClientRateLimited
+          expr: |
+            (
+              sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*", status="429"}[10m]))
+              /
+              sum by (namespace) (rate(reviewsignal_http_requests_total{route=~"/v1/.*"}[10m]))
+            ) > 0.05
+          for: 15m
+          labels:
+            severity: warning
+            team: reviewsignal
+            component: api
+          annotations:
+            summary: "More than 5% of ReviewSignal API requests are rate limited (429)"
+            description: "{{ $labels.namespace }}: {{ $value | humanizePercentage }} of /v1 requests returned 429 over 10 minutes."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalapiclientratelimited
+
+        - alert: ReviewSignalApiDown
+          expr: max by (namespace) (up{job="reviewsignal-api"}) == 0
+          for: 5m
+          labels:
+            severity: critical
+            team: reviewsignal
+            component: api
+            slo: api-availability
+          annotations:
+            summary: "No ReviewSignal API pod can be scraped"
+            description: "{{ $labels.namespace }}: every reviewsignal-api target has been down for 5 minutes."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalapidown
+
+    # -----------------------------------------------------------------------
+    # Ingestion
+    # -----------------------------------------------------------------------
+    - name: reviewsignal.ingestion
+      rules:
+        # SLO: >= 95% of active connections synced within 6 h.
+        - alert: ReviewSignalIngestionStale
+          expr: reviewsignal:ingestion_freshness:ratio < 0.95
+          for: 30m
+          labels:
+            severity: critical
+            team: reviewsignal
+            component: worker
+            slo: ingestion-freshness
+          annotations:
+            summary: "Fewer than 95% of active store connections synced in the last 6 h"
+            description: "{{ $labels.namespace }}: freshness is {{ $value | humanizePercentage }} (SLO >= 95%)."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalingestionstale
+        - alert: ReviewSignalIngestionStale
+          expr: reviewsignal:ingestion_freshness:ratio < 0.98
+          for: 1h
+          labels:
+            severity: warning
+            team: reviewsignal
+            component: worker
+            slo: ingestion-freshness
+          annotations:
+            summary: "Ingestion freshness is approaching the SLO"
+            description: "{{ $labels.namespace }}: freshness is {{ $value | humanizePercentage }} (SLO >= 95%)."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalingestionstale
+
+        # Faster signal than staleness when the scheduler stops. Needs the
+        # counter to exist (at least one run since the worker started);
+        # ReviewSignalIngestionStale covers the remaining case.
+        - alert: ReviewSignalIngestionStalled
+          expr: |
+            sum by (namespace) (increase(reviewsignal_ingestion_runs_total[4h])) == 0
+            and on (namespace)
+            reviewsignal:connections_active:count > 0
+          for: 15m
+          labels:
+            severity: critical
+            team: reviewsignal
+            component: worker
+            slo: ingestion-freshness
+          annotations:
+            summary: "No ingestion run in 4 h although connections are active"
+            description: "{{ $labels.namespace }}: the sync schedule appears to have stopped."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalingestionstalled
+
+        - alert: ReviewSignalIngestionRunsFailing
+          expr: |
+            (
+              sum by (namespace, store) (rate(reviewsignal_ingestion_runs_total{status="failed"}[1h]))
+              /
+              sum by (namespace, store) (rate(reviewsignal_ingestion_runs_total[1h]))
+            ) > 0.2
+          for: 30m
+          labels:
+            severity: warning
+            team: reviewsignal
+            component: worker
+          annotations:
+            summary: "More than 20% of {{ $labels.store }} ingestion runs are failing"
+            description: "{{ $labels.namespace }}: {{ $value | humanizePercentage }} of {{ $labels.store }} runs failed in the last hour."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalingestionrunsfailing
+
+        # Window covers one default sync cycle (SYNC_CRON every 2 h).
+        - alert: ReviewSignalStoreRateLimited
+          expr: |
+            (
+              sum by (namespace, store) (increase(reviewsignal_ingestion_rate_limited_total[2h]))
+              /
+              clamp_min(sum by (namespace, store) (increase(reviewsignal_ingestion_runs_total[2h])), 1)
+            ) > 0.1
+            and
+            sum by (namespace, store) (increase(reviewsignal_ingestion_rate_limited_total[2h])) >= 3
+          for: 15m
+          labels:
+            severity: warning
+            team: reviewsignal
+            component: worker
+          annotations:
+            summary: "{{ $labels.store }} is rate limiting ReviewSignal (429)"
+            description: "{{ $labels.namespace }}: {{ $value | humanizePercentage }} of {{ $labels.store }} ingestion runs ended on a 429 over 2 hours."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalstoreratelimited
+
+        - alert: ReviewSignalConnectionsInError
+          expr: |
+            (
+              sum by (namespace, store) (max by (namespace, store) (reviewsignal_connections{status="error"}))
+              /
+              clamp_min(sum by (namespace, store) (max by (namespace, store, status) (reviewsignal_connections)), 1)
+            ) > 0.1
+          for: 2h
+          labels:
+            severity: warning
+            team: reviewsignal
+            component: worker
+          annotations:
+            summary: "More than 10% of {{ $labels.store }} connections are in error"
+            description: "{{ $labels.namespace }}: {{ $value | humanizePercentage }} of {{ $labels.store }} connections have status error (usually revoked or changed credentials)."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalconnectionsinerror
+
+        # Initial threshold; calibrate with the coverage measured in M2.
+        - alert: ReviewSignalCoverageDegraded
+          expr: reviewsignal:coverage_complete:ratio30d < 0.8
+          for: 6h
+          labels:
+            severity: info
+            team: reviewsignal
+            component: worker
+          annotations:
+            summary: "Less than 80% of connection-days in the last 30 days have complete coverage"
+            description: "{{ $labels.namespace }}: complete coverage is {{ $value | humanizePercentage }}."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalcoveragedegraded
+
+    # -----------------------------------------------------------------------
+    # Classifier
+    # -----------------------------------------------------------------------
+    - name: reviewsignal.classifier
+      rules:
+        - alert: ReviewSignalClassifierFailureRateHigh
+          expr: |
+            reviewsignal:classifier_failure_ratio:rate15m > 0.5
+            and
+            sum by (namespace, provider) (increase(reviewsignal_classifier_requests_total[15m])) >= 20
+          for: 10m
+          labels:
+            severity: critical
+            team: reviewsignal
+            component: classifier
+          annotations:
+            summary: "Most reviews sent to {{ $labels.provider }} fail classification"
+            description: "{{ $labels.namespace }}: {{ $value | humanizePercentage }} of reviews sent to {{ $labels.provider }} failed over 15 minutes. They stay unclassified until retried."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalclassifierfailureratehigh
+        - alert: ReviewSignalClassifierFailureRateHigh
+          expr: |
+            reviewsignal:classifier_failure_ratio:rate15m > 0.1
+            and
+            sum by (namespace, provider) (increase(reviewsignal_classifier_requests_total[15m])) >= 20
+          for: 15m
+          labels:
+            severity: warning
+            team: reviewsignal
+            component: classifier
+          annotations:
+            summary: "More than 10% of reviews sent to {{ $labels.provider }} fail classification"
+            description: "{{ $labels.namespace }}: {{ $value | humanizePercentage }} of reviews sent to {{ $labels.provider }} failed over 15 minutes."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalclassifierfailureratehigh
+
+        # Initial threshold for batched LLM calls; tune after M1 latency data.
+        - alert: ReviewSignalClassifierLatencyHigh
+          expr: reviewsignal:classifier_latency_seconds:p95_15m > 60
+          for: 30m
+          labels:
+            severity: warning
+            team: reviewsignal
+            component: classifier
+          annotations:
+            summary: "{{ $labels.provider }} classifier batch p95 latency is above 60 s"
+            description: "{{ $labels.namespace }}: p95 is {{ $value | humanizeDuration }}."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalclassifierlatencyhigh
+
+        - alert: ReviewSignalClassifierBudgetExhausted
+          expr: sum by (namespace) (increase(reviewsignal_classifier_budget_exhausted_total[1h])) > 0
+          labels:
+            severity: warning
+            team: reviewsignal
+            component: classifier
+          annotations:
+            summary: "A tenant reached its daily classification budget"
+            description: "{{ $labels.namespace }}: {{ $value | humanize }} budget cut-off events in the last hour. Affected reviews wait for the next budget window."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalclassifierbudgetexhausted
+
+    # -----------------------------------------------------------------------
+    # Jobs and worker
+    # -----------------------------------------------------------------------
+    - name: reviewsignal.jobs
+      rules:
+        # Initial threshold; tune per queue once volumes are known.
+        - alert: ReviewSignalQueueBacklog
+          expr: |
+            max by (namespace, queue) (reviewsignal_queue_depth) > 1000
+            and
+            deriv(max by (namespace, queue) (reviewsignal_queue_depth)[30m:1m]) >= 0
+          for: 30m
+          labels:
+            severity: warning
+            team: reviewsignal
+            component: worker
+          annotations:
+            summary: "Queue {{ $labels.queue }} has a growing backlog"
+            description: "{{ $labels.namespace }}: {{ $labels.queue }} holds {{ $value | humanize }} jobs and is not draining."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalqueuebacklog
+
+        - alert: ReviewSignalJobsFailing
+          expr: |
+            (
+              sum by (namespace, queue) (rate(reviewsignal_jobs_total{outcome="failed"}[30m]))
+              /
+              sum by (namespace, queue) (rate(reviewsignal_jobs_total[30m]))
+            ) > 0.1
+            and
+            sum by (namespace, queue) (increase(reviewsignal_jobs_total[30m])) >= 10
+          for: 15m
+          labels:
+            severity: warning
+            team: reviewsignal
+            component: worker
+          annotations:
+            summary: "More than 10% of {{ $labels.queue }} jobs are failing"
+            description: "{{ $labels.namespace }}: {{ $value | humanizePercentage }} of {{ $labels.queue }} jobs failed over 30 minutes."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignaljobsfailing
+
+        - alert: ReviewSignalWorkerDown
+          expr: max by (namespace) (up{job="reviewsignal-worker"}) == 0
+          for: 10m
+          labels:
+            severity: critical
+            team: reviewsignal
+            component: worker
+          annotations:
+            summary: "No ReviewSignal worker pod can be scraped"
+            description: "{{ $labels.namespace }}: every reviewsignal-worker target has been down for 10 minutes. Ingestion, classification and guardrail evaluation are stopped."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalworkerdown
+
+        # Requires kube-state-metrics.
+        - alert: ReviewSignalMigrationFailed
+          expr: max by (namespace, job_name) (kube_job_failed{job_name=~".*reviewsignal.*-migrate", condition="true"}) == 1
+          labels:
+            severity: critical
+            team: reviewsignal
+            component: migrate
+          annotations:
+            summary: "ReviewSignal database migration job failed"
+            description: "{{ $labels.namespace }}/{{ $labels.job_name }} failed. The deployment is blocked at the PreSync hook."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalmigrationfailed
+
+    # -----------------------------------------------------------------------
+    # Guardrails and alert delivery
+    # -----------------------------------------------------------------------
+    - name: reviewsignal.guardrails
+      rules:
+        - alert: ReviewSignalAlertDeliveryFailing
+          expr: |
+            sum by (namespace) (increase(reviewsignal_alert_deliveries_total{outcome=~"failed|not_configured"}[1h])) > 0
+            unless on (namespace)
+            sum by (namespace) (increase(reviewsignal_alert_deliveries_total{outcome="delivered"}[1h])) > 0
+          for: 5m
+          labels:
+            severity: critical
+            team: reviewsignal
+            component: worker
+          annotations:
+            summary: "Every guardrail alert delivery to Loomit failed in the last hour"
+            description: "{{ $labels.namespace }}: {{ $value | humanize }} deliveries failed or had no webhook configured, and none succeeded. Publishers and CSMs are not being notified."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalalertdeliveryfailing
+        - alert: ReviewSignalAlertDeliveryFailing
+          expr: sum by (namespace) (increase(reviewsignal_alert_deliveries_total{outcome=~"failed|not_configured"}[30m])) >= 3
+          for: 5m
+          labels:
+            severity: warning
+            team: reviewsignal
+            component: worker
+          annotations:
+            summary: "Guardrail alert deliveries to Loomit are failing"
+            description: "{{ $labels.namespace }}: {{ $value | humanize }} deliveries failed or had no webhook configured in 30 minutes."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalalertdeliveryfailing
+
+        # Calibration signal, not an outage: a high breach share usually means
+        # thresholds are too tight (plan section 3.4, backtest).
+        - alert: ReviewSignalGuardrailBreachRateHigh
+          expr: |
+            (
+              sum by (namespace) (increase(reviewsignal_guardrail_evaluations_total{status="breach"}[1d]))
+              /
+              sum by (namespace) (increase(reviewsignal_guardrail_evaluations_total{status!="insufficient"}[1d]))
+            ) > 0.3
+            and
+            sum by (namespace) (increase(reviewsignal_guardrail_evaluations_total{status!="insufficient"}[1d])) >= 20
+          for: 1h
+          labels:
+            severity: info
+            team: reviewsignal
+            component: worker
+          annotations:
+            summary: "More than 30% of conclusive guardrail evaluations are breaches"
+            description: "{{ $labels.namespace }}: breach share is {{ $value | humanizePercentage }} over 24 h."
+            runbook_url: https://github.com/faocampo/appstore-review-analyzer/blob/main/docs/operations/runbooks.md#reviewsignalguardrailbreachratehigh

@@ -1,0 +1,21 @@
+apiVersion: v2
+name: reviewsignal
+description: >-
+  ReviewSignal for Loomit: review ingestion, classification, evolution panel API
+  and experiment guardrails. Deploys the API, the worker and the migrations job
+  from one image.
+type: application
+# Chart version: bump on every chart change.
+version: 0.1.0
+# Default image tag when image.tag is empty.
+appVersion: "0.1.0"
+kubeVersion: ">=1.29.0-0"
+home: https://github.com/faocampo/appstore-review-analyzer
+sources:
+  - https://github.com/faocampo/appstore-review-analyzer
+keywords:
+  - loomit
+  - reviews
+annotations:
+  # Contract between the chart and the image: docs/service-contract.md
+  x3m.io/service-contract: docs/service-contract.md

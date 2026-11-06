@@ -1,0 +1,43 @@
+# Keep the build context small and free of secrets.
+
+# VCS and CI
+.git
+.github
+.gitignore
+
+# Dependencies and build output (rebuilt inside the image)
+node_modules
+.next
+dist
+coverage
+*.tsbuildinfo
+
+# Local environments and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+secret
+**/service-account*.json
+
+# Tooling and editors
+.venv
+.agents
+.claude
+.vscode
+.idea
+.DS_Store
+*.log
+__pycache__
+
+# Not needed to build or run the service
+docs
+deploy
+loadtest
+Dockerfile
+.dockerignore
+docker-compose*.yml
+README.md
+USER-GUIDE.md
+LICENSE
