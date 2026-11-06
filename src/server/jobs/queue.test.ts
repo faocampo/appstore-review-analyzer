@@ -30,6 +30,14 @@ class MemoryStorage implements ObjectStorage {
   async presignPut(key: string) {
     return `https://example.test/${key}`;
   }
+  async size(key: string) {
+    return this.objects.get(key)?.byteLength ?? null;
+  }
+  async deletePrefix(prefix: string) {
+    const keys = [...this.objects.keys()].filter((key) => key.startsWith(prefix));
+    keys.forEach((key) => this.objects.delete(key));
+    return keys.length;
+  }
   async get(key: string) {
     return this.objects.get(key) ?? new Uint8Array();
   }

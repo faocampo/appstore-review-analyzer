@@ -318,7 +318,15 @@ function decodeCursor(cursor: string | undefined): [string, string] | null {
   if (!cursor) return null;
   try {
     const value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown;
-    if (Array.isArray(value) && typeof value[0] === "string" && typeof value[1] === "string") return [value[0], value[1]];
+    if (
+      Array.isArray(value) &&
+      typeof value[0] === "string" &&
+      typeof value[1] === "string" &&
+      !Number.isNaN(Date.parse(value[0])) &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value[1])
+    ) {
+      return [value[0], value[1]];
+    }
   } catch {
     // fall through
   }

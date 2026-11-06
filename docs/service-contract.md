@@ -43,6 +43,8 @@ All server processes are built with `npm run build:server` (tsup) into
 | `EVALUATE_CRON` | worker | no | Schedule for guardrail evaluation (default hourly). |
 | `MIN_N` | api, worker | no | Minimum reviews per bucket or arm before a value is shown (default 20). |
 | `TENANT_RATE_LIMIT_PER_MINUTE` | api | no | Requests per publisher per minute, per pod (default 600). |
+| `DAILY_REVIEW_CAP` | worker | no | Reviews classified per publisher per UTC day (default 20000), on top of the USD budget. |
+| `TYPESAFE_COST_PER_REVIEW_USD` | worker | with Jev | Contract price per review, so the USD budget applies to Jev (which reports no cost). |
 | `X3M_GOOGLE_SERVICE_ACCOUNT_JSON` | api, worker | for Google Play | X3M's Google service account (JSON or base64). Publishers invite its email in Play Console and connect with `{ "useX3mServiceAccount": true }`. Secret. |
 | Classifier variables | worker | yes | `CLASSIFIER_PROVIDER`, `OPENROUTER_*`, `TYPESAFE_*`, `CLASSIFIER_FALLBACK_PROVIDER`, `CLASSIFIER_*` (see README). |
 | `NEXT_PUBLIC_API_URL` | web | yes | Base URL of the API for the panels. |

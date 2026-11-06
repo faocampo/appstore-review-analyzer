@@ -90,19 +90,21 @@ export class AwsSecretStore implements SecretStore {
     private readonly prefix: string,
   ) {}
 
-  private name(ref: string): string {
+  private name(ref: string, tenantId: string): string {
+    // Defence in depth: a tenant can only ever address its own secrets.
+    if (!ref.startsWith(`tenant/${tenantId}/`)) throw new Error("secret ref does not belong to the tenant");
     return `${this.prefix}${ref}`;
   }
 
   async put(tenantId: string, ref: string, value: Record<string, unknown>): Promise<void> {
     const SecretString = JSON.stringify(value);
     try {
-      await this.client.send(new PutSecretValueCommand({ SecretId: this.name(ref), SecretString }));
+      await this.client.send(new PutSecretValueCommand({ SecretId: this.name(ref, tenantId), SecretString }));
     } catch (error) {
       if (!(error instanceof ResourceNotFoundException)) throw error;
       await this.client.send(
         new CreateSecretCommand({
-          Name: this.name(ref),
+          Name: this.name(ref, tenantId),
           SecretString,
           Tags: [
             { Key: "app", Value: "reviewsignal" },
@@ -113,9 +115,10 @@ export class AwsSecretStore implements SecretStore {
     }
   }
 
-  async get(_tenantId: string, ref: string): Promise<Record<string, unknown> | null> {
+  async get(tenantId: string, ref: string): Promise<Record<string, unknown> | null> {
+    const name = this.name(ref, tenantId);
     try {
-      const result = await this.client.send(new GetSecretValueCommand({ SecretId: this.name(ref) }));
+      const result = await this.client.send(new GetSecretValueCommand({ SecretId: name }));
       return result.SecretString ? (JSON.parse(result.SecretString) as Record<string, unknown>) : null;
     } catch (error) {
       if (error instanceof ResourceNotFoundException) return null;
@@ -123,10 +126,11 @@ export class AwsSecretStore implements SecretStore {
     }
   }
 
-  async delete(_tenantId: string, ref: string): Promise<void> {
+  async delete(tenantId: string, ref: string): Promise<void> {
+    const name = this.name(ref, tenantId);
     try {
       await this.client.send(
-        new DeleteSecretCommand({ SecretId: this.name(ref), ForceDeleteWithoutRecovery: true }),
+        new DeleteSecretCommand({ SecretId: name, ForceDeleteWithoutRecovery: true }),
       );
     } catch (error) {
       if (!(error instanceof ResourceNotFoundException)) throw error;

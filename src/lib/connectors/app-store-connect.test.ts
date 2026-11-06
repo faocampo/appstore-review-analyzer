@@ -36,7 +36,7 @@ describe("fetchAppleReviews", () => {
             },
             appleReview("empty-review", "2026-09-19T12:00:00Z", "  "),
           ],
-          links: { next: "https://example.test/page-2" },
+          links: { next: "https://api.appstoreconnect.apple.com/v1/apps/123/customerReviews?cursor=2" },
         }),
       )
       .mockResolvedValueOnce(
@@ -83,7 +83,7 @@ describe("fetchAppleReviews", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "https://example.test/page-2",
+      "https://api.appstoreconnect.apple.com/v1/apps/123/customerReviews?cursor=2",
       expect.any(Object),
     );
   });
@@ -96,7 +96,7 @@ describe("fetchAppleReviews", () => {
           appleReview("in-period", "2026-09-10T00:00:00Z"),
           appleReview("too-old", "2026-08-20T00:00:00Z"),
         ],
-        links: { next: "https://example.test/page-2" },
+        links: { next: "https://api.appstoreconnect.apple.com/v1/apps/123/customerReviews?cursor=2" },
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -115,7 +115,7 @@ describe("fetchAppleReviews", () => {
       vi.fn().mockResolvedValue(
         Response.json({
           data: [appleReview("recent", "2026-09-20T00:00:00Z")],
-          links: { next: "https://example.test/page-2" },
+          links: { next: "https://api.appstoreconnect.apple.com/v1/apps/123/customerReviews?cursor=2" },
         }),
       ),
     );
@@ -149,7 +149,7 @@ describe("fetchAppleReviews", () => {
           appleReview("new", "2026-10-05T00:00:00Z"),
           appleReview("at-watermark", "2026-10-01T00:00:00Z"),
         ],
-        links: { next: "https://example.test/page-2" },
+        links: { next: "https://api.appstoreconnect.apple.com/v1/apps/123/customerReviews?cursor=2" },
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -166,5 +166,19 @@ describe("fetchAppleReviews", () => {
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
       headers: { Authorization: "Bearer tenant-token" },
     });
+  });
+
+  it("does not follow pagination links to other hosts", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        data: [appleReview("one", "2026-09-20T00:00:00Z")],
+        links: { next: "https://attacker.example/steal" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchAppleReviews({ appId: "123", maxPages: 5 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.reviews).toHaveLength(1);
   });
 });

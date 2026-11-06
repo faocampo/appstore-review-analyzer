@@ -10,6 +10,8 @@ export interface AppRow {
   android_package: string | null;
   apple_app_id: string | null;
   play_reports_bucket: string | null;
+  /** True only when Loomit (service) or an X3M admin set the store identifiers. */
+  identity_verified: boolean;
 }
 
 export interface ConnectionRow {
@@ -27,21 +29,32 @@ export interface ConnectionRow {
 }
 
 const APP_COLUMNS =
-  "id, tenant_id, loomit_app_id, name, android_package, apple_app_id, play_reports_bucket";
+  "id, tenant_id, loomit_app_id, name, android_package, apple_app_id, play_reports_bucket, identity_verified";
 const CONNECTION_COLUMNS =
   "id, tenant_id, app_id, store, secret_ref, status, last_verified_at, last_synced_at, last_error, watermark, backfilled_at";
 
+/**
+ * Creates or updates an app. `trusted` is true only for Loomit (service) and
+ * X3M admins. A publisher's update keeps verification only when it does not
+ * change the store identifiers.
+ */
 export async function upsertApp(
   client: Client,
   tenantId: string,
   input: CreateAppRequest,
+  trusted = false,
 ): Promise<AppRow> {
   const { rows } = await client.query<AppRow>(
-    `insert into app (tenant_id, loomit_app_id, name, android_package, apple_app_id, play_reports_bucket)
-     values ($1, $2, $3, $4, $5, $6)
+    `insert into app (tenant_id, loomit_app_id, name, android_package, apple_app_id, play_reports_bucket, identity_verified)
+     values ($1, $2, $3, $4, $5, $6, $7)
      on conflict (tenant_id, loomit_app_id) do update set
        name = excluded.name, android_package = excluded.android_package,
-       apple_app_id = excluded.apple_app_id, play_reports_bucket = excluded.play_reports_bucket
+       apple_app_id = excluded.apple_app_id, play_reports_bucket = excluded.play_reports_bucket,
+       identity_verified = excluded.identity_verified or (
+         app.identity_verified
+         and app.android_package is not distinct from excluded.android_package
+         and app.play_reports_bucket is not distinct from excluded.play_reports_bucket
+       )
      returning ${APP_COLUMNS}`,
     [
       tenantId,
@@ -50,6 +63,7 @@ export async function upsertApp(
       input.androidPackage ?? null,
       input.appleAppId ?? null,
       input.playReportsBucket ?? null,
+      trusted,
     ],
   );
   return rows[0];
@@ -152,6 +166,7 @@ export function toAppDto(app: AppRow, connections: ConnectionRow[]): AppDto {
     androidPackage: app.android_package,
     appleAppId: app.apple_app_id,
     playReportsBucket: app.play_reports_bucket,
+    identityVerified: app.identity_verified,
     connections: connections.filter((row) => row.app_id === app.id).map(toConnectionDto),
   };
 }

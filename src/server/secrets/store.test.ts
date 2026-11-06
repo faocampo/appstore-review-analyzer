@@ -88,14 +88,15 @@ describe("AwsSecretStore", () => {
       .mockResolvedValueOnce({});
     const store = new AwsSecretStore({ send }, "reviewsignal/");
 
-    await store.put("t", "ref", { keyId: "K" });
-    await store.put("t", "ref", { keyId: "K" });
-    await expect(store.get("t", "ref")).resolves.toEqual({ keyId: "K" });
-    await store.delete("t", "ref");
+    await store.put("t", "tenant/t/ref", { keyId: "K" });
+    await store.put("t", "tenant/t/ref", { keyId: "K" });
+    await expect(store.get("t", "tenant/t/ref")).resolves.toEqual({ keyId: "K" });
+    await store.delete("t", "tenant/t/ref");
 
     expect(send.mock.calls[0][0]).toBeInstanceOf(PutSecretValueCommand);
     expect(send.mock.calls[1][0]).toBeInstanceOf(CreateSecretCommand);
-    expect(send.mock.calls[1][0].input).toMatchObject({ Name: "reviewsignal/ref" });
+    expect(send.mock.calls[1][0].input).toMatchObject({ Name: "reviewsignal/tenant/t/ref" });
+    await expect(store.get("other", "tenant/t/ref")).rejects.toThrow("does not belong to the tenant");
     expect(send.mock.calls[3][0]).toBeInstanceOf(GetSecretValueCommand);
     expect(send.mock.calls[4][0]).toBeInstanceOf(DeleteSecretCommand);
   });
@@ -111,12 +112,12 @@ describe("AwsSecretStore", () => {
       .mockRejectedValueOnce(new Error("denied"));
     const store = new AwsSecretStore({ send }, "p/");
 
-    await expect(store.get("t", "missing")).resolves.toBeNull();
-    await expect(store.delete("t", "missing")).resolves.toBeUndefined();
-    await expect(store.get("t", "empty")).resolves.toBeNull();
-    await expect(store.put("t", "x", {})).rejects.toThrow("throttled");
-    await expect(store.get("t", "x")).rejects.toThrow("denied");
-    await expect(store.delete("t", "x")).rejects.toThrow("denied");
+    await expect(store.get("t", "tenant/t/missing")).resolves.toBeNull();
+    await expect(store.delete("t", "tenant/t/missing")).resolves.toBeUndefined();
+    await expect(store.get("t", "tenant/t/empty")).resolves.toBeNull();
+    await expect(store.put("t", "tenant/t/x", {})).rejects.toThrow("throttled");
+    await expect(store.get("t", "tenant/t/x")).rejects.toThrow("denied");
+    await expect(store.delete("t", "tenant/t/x")).rejects.toThrow("denied");
   });
 
   it("is selected by configuration", () => {

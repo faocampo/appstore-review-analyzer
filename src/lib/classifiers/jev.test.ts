@@ -254,4 +254,14 @@ describe("Jev network resilience", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
     await expect(classifyWithJev(review)).rejects.toThrow("TypeSafe System One request failed: fetch failed");
   });
+
+  it("prices each review from the contract price so budgets apply", async () => {
+    vi.stubEnv("TYPESAFE_API_KEY", "test-key");
+    vi.stubEnv("TYPESAFE_COST_PER_REVIEW_USD", "0.0004");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(jevAnswer({}))));
+    expect((await classifyWithJev(review)).costUsd).toBe(0.0004);
+    vi.stubEnv("TYPESAFE_COST_PER_REVIEW_USD", "");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(jevAnswer({}))));
+    expect((await classifyWithJev(review)).costUsd).toBeNull();
+  });
 });

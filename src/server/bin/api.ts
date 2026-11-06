@@ -23,6 +23,7 @@ async function main(): Promise<void> {
     corsOrigins: config.CORS_ORIGINS.split(",").map((origin) => origin.trim()).filter(Boolean),
     minN: config.MIN_N,
     rateLimitPerMinute: config.TENANT_RATE_LIMIT_PER_MINUTE,
+    trustProxy: config.TRUST_PROXY,
     logger: true,
   });
 

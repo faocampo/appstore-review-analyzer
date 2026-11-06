@@ -55,6 +55,9 @@ const schema = z
         context.addIssue({ code: "custom", message: "SECRETS_ENCRYPTION_KEY must be 32 bytes, base64-encoded", path: ["SECRETS_ENCRYPTION_KEY"] });
       }
     }
+    if (production && value.LOOMIT_NOTIFY_URL && !value.LOOMIT_NOTIFY_URL.startsWith("https://")) {
+      context.addIssue({ code: "custom", message: "LOOMIT_NOTIFY_URL must use https in production", path: ["LOOMIT_NOTIFY_URL"] });
+    }
     if (value.SECRET_STORE === "aws" && !value.AWS_REGION) {
       context.addIssue({ code: "custom", message: "AWS_REGION is required when SECRET_STORE=aws", path: ["AWS_REGION"] });
     }

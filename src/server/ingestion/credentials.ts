@@ -4,7 +4,10 @@ import { signAppStoreConnectToken } from "@/lib/credentials/apple";
 import { mintGoogleAccessToken } from "@/lib/credentials/google";
 import { PublicError } from "@/lib/errors";
 import { appleCredentialsSchema, googleCredentialsSchema } from "@/server/api/contracts";
-import type { ConnectionRow } from "@/server/repo/apps";
+import type { AppRow, ConnectionRow } from "@/server/repo/apps";
+
+export const UNVERIFIED_APP =
+  "X3M's Google account can only be used for apps registered by Loomit. Ask your Loomit contact to register the app, or connect your own service-account key.";
 import type { SecretStore } from "@/server/secrets/store";
 
 export const GCS_READ_SCOPE = "https://www.googleapis.com/auth/devstorage.read_only";
@@ -43,11 +46,15 @@ async function readSecret<T>(
 export async function tokenForConnection(
   secrets: SecretStore,
   connection: ConnectionRow,
+  app: Pick<AppRow, "identity_verified">,
   options: { scopes?: string[] } = {},
 ): Promise<string> {
   if (connection.store === "google_play") {
     const credentials = await readSecret(secrets, connection, googleCredentialsSchema);
     if ("useX3mServiceAccount" in credentials) {
+      // X3M's account can read every app whose owner invited it; only use it
+      // for identities Loomit vouched for (security review H1).
+      if (!app.identity_verified) throw new PublicError(UNVERIFIED_APP, 409);
       const json = x3mServiceAccountJson();
       if (!json) throw new PublicError("X3M's Google service account is not configured on the server.", 503);
       return mintGoogleAccessToken(json, options.scopes);

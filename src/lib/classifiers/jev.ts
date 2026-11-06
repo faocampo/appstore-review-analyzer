@@ -94,6 +94,12 @@ function reasonProbabilities(
   );
 }
 
+/** Contract price per classified review (TYPESAFE_COST_PER_REVIEW_USD), so budgets apply to Jev too. */
+function jevCostPerReview(): number | null {
+  const value = Number.parseFloat(process.env.TYPESAFE_COST_PER_REVIEW_USD ?? "");
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 function jevInfo(): ClassifierInfo {
   return {
     provider: "jev",
@@ -219,6 +225,8 @@ export async function classifyWithJev(review: Review): Promise<Classification> {
         payload.answers.primary_reason.probabilities,
       ),
       reasonConfidence: payload.answers.primary_reason.confidence,
+      // TypeSafe does not report cost; use the contract price per review.
+      costUsd: jevCostPerReview(),
     });
   }
 }

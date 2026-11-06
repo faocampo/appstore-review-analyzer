@@ -92,6 +92,7 @@ describe("OpenRouter classifier", () => {
           schema: OPENROUTER_RESPONSE_SCHEMA,
         },
       },
+      usage: { include: true },
       provider: { data_collection: "deny", zdr: true, require_parameters: true },
     });
     const sent = JSON.parse(body.messages[1].content);

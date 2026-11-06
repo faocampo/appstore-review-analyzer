@@ -93,7 +93,9 @@ export async function fetchAppleReviews(options: {
       });
     }
 
-    nextUrl = payload.links.next ?? undefined;
+    // Only follow pagination links on Apple's API host (the bearer token goes with them).
+    const next = payload.links.next ? new URL(payload.links.next) : null;
+    nextUrl = next && next.protocol === "https:" && next.hostname === "api.appstoreconnect.apple.com" ? next.toString() : undefined;
   }
 
   const truncated = Boolean(nextUrl) && !reachedStart;

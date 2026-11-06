@@ -215,6 +215,8 @@ async function requestBatch(
             schema: OPENROUTER_RESPONSE_SCHEMA,
           },
         },
+        // Ask for usage accounting so the per-tenant budget sees real cost.
+        usage: { include: true },
         provider: {
           data_collection: "deny",
           zdr: process.env.OPENROUTER_ZDR !== "false",

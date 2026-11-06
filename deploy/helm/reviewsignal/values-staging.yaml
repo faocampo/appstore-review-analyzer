@@ -50,6 +50,7 @@ externalSecrets:
     - OPENROUTER_API_KEY
     - TYPESAFE_API_KEY
     - LOOMIT_NOTIFY_SECRET
+    - X3M_GOOGLE_SERVICE_ACCOUNT_JSON
 
 api:
   autoscaling:

@@ -218,6 +218,33 @@ expiry on the uploads bucket (*proposed:* 7 days after processing).
 - [ ] Images are built only in CI, tagged with the git SHA, immutable tags in ECR; Argo CD deploys tags from the values files only.
 - [ ] License review of production dependencies (no copyleft obligations triggered for the hosted service).
 
+## 4a. Code review, 2026-11-06
+
+A read-only code review of the service (tenancy, authentication, secrets,
+outbound requests, input handling, webhooks and the chart) found the issues
+below. Each confirmed issue was reproduced before it was fixed, and each fix
+has a regression test. This is an internal code review; it does not replace
+the sign-off below.
+
+| ID | Severity | Finding | Status |
+| --- | --- | --- | --- |
+| C1 | Critical | A publisher-supplied Google "service account" of another credential type (`external_account`, impersonated, authorized user) made google-auth-library read pod files or call attacker URLs, exfiltrating secrets and the IRSA token. | **Fixed.** Only `type: service_account` keys with Google's token endpoint are accepted (validated on write and on use); tokens are minted with the JWT client from email and key only. |
+| H1 | High | With X3M's shared Google account, a publisher could register another publisher's package or reports bucket and import its reviews. | **Fixed.** App identity is trusted only when set by Loomit (service role) or an X3M admin; the shared account refuses unverified apps; verified packages and buckets are unique across tenants; a publisher's change to them drops verification. **Recommended next step:** one Google service account per publisher. |
+| M1 | Medium | Unbounded date ranges could exhaust API memory. | **Fixed.** Ranges start after 2008 and span at most 1,100 days; experiment and baseline windows at most 366 days. |
+| M2 | Medium | Upload size was not enforced; a huge CSV could exhaust worker memory. | **Fixed.** Size is checked (HEAD) before reading; limit 50 MB. |
+| M3 | Medium | The daily budget did not apply to Jev (no cost reported); OpenRouter cost depended on usage being returned. | **Fixed.** Jev uses `TYPESAFE_COST_PER_REVIEW_USD`; OpenRouter requests usage accounting; a daily review cap (`DAILY_REVIEW_CAP`) bounds spend for every provider. |
+| M4 | Medium | Percent-encoded paths skipped the authentication hook (failed closed today). | **Fixed.** Authentication keys off the matched route; tenant handlers return 401 without a principal. |
+| L1 | Low | OIDC accepted any algorithm and tokens without `exp`. | **Fixed.** Algorithms pinned (RS256/ES256/PS256); `exp` and `sub` required; 24 h max age. |
+| L2 | Low | A review in a batch can try to steer labels of others in the same batch (prompt injection). | **Accepted for now.** Output is schema-validated and batch-local; cannot cross tenants. Follow-up: flag sentiment that contradicts the star rating; consider single-review calls for guardrail-critical apps. |
+| L3 | Low | RLS bypass is a session setting; the runtime role owns the tables. | **Follow-up.** Run system work under a dedicated BYPASSRLS role and keep the runtime role from owning tables (needs a migration with role privileges on RDS). |
+| L4 | Low | The publisher header for service/admin tokens was not validated; the limiter map was unbounded. | **Fixed.** Format validated; expired limiter windows evicted. |
+| L5 | Low | Malformed cursors and ids returned 500. | **Fixed.** Validated; return 400 or are ignored. |
+| L6 | Low | Offboarding left uploaded CSVs in S3. | **Fixed.** The tenant's upload prefix is deleted. Exports hold aggregates only. |
+| L7 | Low | The standalone `/api/analyze` uses one shared token and a spoofable rate-limit key. | **Accepted.** Demo and support tool only; not deployed by the Helm chart. |
+| L8 | Low | `trustProxy` ignored `TRUST_PROXY`. | **Fixed.** |
+| Info | — | AWS secret refs not tied to the tenant; Apple pagination followed any host; GCS listing ignored paging; webhook URL could be http; X3M key missing from the overlays. | **Fixed.** |
+| Info | — | Base image tag not pinned to a digest; panels send no CSP headers. | **Follow-up** before GA. |
+
 ## 5. Sign-off
 
 | Area | Reviewer role | Date | Result |

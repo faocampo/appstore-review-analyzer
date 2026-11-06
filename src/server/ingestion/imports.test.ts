@@ -43,6 +43,14 @@ class MemoryStorage implements ObjectStorage {
   async presignPut(key: string) {
     return `https://uploads.example.test/${key}`;
   }
+  async size(key: string) {
+    return this.objects.get(key)?.byteLength ?? null;
+  }
+  async deletePrefix(prefix: string) {
+    const keys = [...this.objects.keys()].filter((key) => key.startsWith(prefix));
+    keys.forEach((key) => this.objects.delete(key));
+    return keys.length;
+  }
   async get(key: string) {
     const value = this.objects.get(key);
     if (!value) throw new Error("NoSuchKey");
@@ -86,12 +94,24 @@ describe("CSV upload import", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(importUpload({ pool: db.pool, secrets, uploads: new MemoryStorage() }, uploadId)).rejects.toThrow(
-      "Import failed",
+      "The file was not uploaded.",
     );
     const status = await withScope(db.pool, SYSTEM, (client) =>
       client.query<{ status: string; error: string }>("select status, error from upload where id = $1", [uploadId]),
     );
-    expect(status.rows[0]).toEqual({ status: "failed", error: "Import failed. See server logs." });
+    expect(status.rows[0]).toEqual({ status: "failed", error: "The file was not uploaded." });
+
+    const big = new MemoryStorage();
+    const getSpy = vi.spyOn(big, "get");
+    big.objects.set("uploads/missing.csv", new Uint8Array(1));
+    vi.spyOn(big, "size").mockResolvedValue(60_000_000);
+    await expect(importUpload({ pool: db.pool, secrets, uploads: big }, uploadId)).rejects.toThrow("larger than 50 MB");
+    expect(getSpy).not.toHaveBeenCalled();
+
+    const broken = new MemoryStorage();
+    broken.objects.set("uploads/missing.csv", new Uint8Array(1));
+    vi.spyOn(broken, "get").mockRejectedValue(new Error("socket closed"));
+    await expect(importUpload({ pool: db.pool, secrets, uploads: broken }, uploadId)).rejects.toThrow("Import failed");
     await expect(importUpload({ pool: db.pool, secrets }, uploadId)).rejects.toThrow("not configured");
     await expect(
       importUpload({ pool: db.pool, secrets, uploads: new MemoryStorage() }, "00000000-0000-0000-0000-000000000000"),

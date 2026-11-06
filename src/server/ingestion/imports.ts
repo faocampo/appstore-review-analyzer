@@ -1,4 +1,11 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  DeleteObjectsCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import { parseReviewCsv } from "@/lib/connectors/csv";
@@ -12,9 +19,16 @@ import { upsertReviews } from "@/server/repo/reviews";
 import type { SecretStore } from "@/server/secrets/store";
 
 /** Object storage used for CSV uploads; S3 in deployed environments. */
+/** Largest CSV the worker will import. */
+export const MAX_UPLOAD_BYTES = 50_000_000;
+
 export interface ObjectStorage {
   presignPut(key: string, contentType: string, expiresInSeconds: number): Promise<string>;
+  /** Object size in bytes, or null when the object does not exist. */
+  size(key: string): Promise<number | null>;
   get(key: string): Promise<Uint8Array>;
+  /** Deletes every object under a prefix (tenant offboarding). */
+  deletePrefix(prefix: string): Promise<number>;
   put(key: string, body: Uint8Array | string, contentType: string): Promise<void>;
 }
 
@@ -30,6 +44,35 @@ export class S3ObjectStorage implements ObjectStorage {
       new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType }),
       { expiresIn: expiresInSeconds },
     );
+  }
+
+  async size(key: string): Promise<number | null> {
+    try {
+      const head = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+      return head.ContentLength ?? 0;
+    } catch (error) {
+      if ((error as { name?: string }).name === "NotFound" || (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async deletePrefix(prefix: string): Promise<number> {
+    let deleted = 0;
+    let token: string | undefined;
+    do {
+      const page = await this.client.send(
+        new ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix, ContinuationToken: token }),
+      );
+      const keys = (page.Contents ?? []).flatMap((item) => (item.Key ? [{ Key: item.Key }] : []));
+      if (keys.length) {
+        await this.client.send(new DeleteObjectsCommand({ Bucket: this.bucket, Delete: { Objects: keys, Quiet: true } }));
+        deleted += keys.length;
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    return deleted;
   }
 
   async get(key: string): Promise<Uint8Array> {
@@ -66,6 +109,12 @@ export async function importUpload(
   if (!upload) throw new PublicError("Upload not found.", 404);
 
   try {
+    // The presigned PUT cannot cap the size, so check it before reading.
+    const size = await deps.uploads.size(upload.object_key);
+    if (size === null) throw new PublicError("The file was not uploaded.", 404);
+    if (size > MAX_UPLOAD_BYTES) {
+      throw new PublicError(`The file is larger than ${MAX_UPLOAD_BYTES / 1_000_000} MB. Split it by month and import each part.`, 413);
+    }
     const bytes = await deps.uploads.get(upload.object_key);
     const parsed = parseReviewCsv({
       content: Buffer.from(bytes).toString("base64"),
@@ -118,13 +167,21 @@ export async function importPlayReports(
     throw new PublicError("Set the Play reports bucket and Android package to import history.", 409);
   }
 
-  const token = await tokenForConnection(deps.secrets, connection, { scopes: [GCS_READ_SCOPE] });
+  const token = await tokenForConnection(deps.secrets, connection, app, { scopes: [GCS_READ_SCOPE] });
   const prefix = `reviews/reviews_${app.android_package}_`;
   const listUrl = new URL(`https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(app.play_reports_bucket)}/o`);
   listUrl.searchParams.set("prefix", prefix);
-  const list = await fetch(listUrl, { headers: { Authorization: `Bearer ${token}` } });
-  if (!list.ok) throw await upstreamError("Google Cloud Storage", list);
-  const listing = (await list.json()) as { items?: Array<{ name: string }> };
+  const items: Array<{ name: string }> = [];
+  let pageToken: string | undefined;
+  do {
+    if (pageToken) listUrl.searchParams.set("pageToken", pageToken);
+    const list = await fetch(listUrl, { headers: { Authorization: `Bearer ${token}` } });
+    if (!list.ok) throw await upstreamError("Google Cloud Storage", list);
+    const page = (await list.json()) as { items?: Array<{ name: string }>; nextPageToken?: string };
+    items.push(...(page.items ?? []));
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+  const listing = { items };
 
   const oldest = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (input.months ?? 24), 1));
   const files = (listing.items ?? [])

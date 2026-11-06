@@ -5,6 +5,8 @@
  */
 import { z } from "zod";
 
+import { isValidServiceAccountKey } from "@/lib/credentials/google";
+
 import type {
   AdSubreasonKey,
   ReasonKey,
@@ -22,9 +24,13 @@ export type CoverageDayStatus = "complete" | "partial" | "unknown";
 export type GuardrailStatus = "ok" | "warn" | "breach" | "insufficient";
 export type GuardrailMetric = "G1" | "G2" | "G3" | "G4";
 
+/** Longest range a panel query may cover (about three years). */
+export const MAX_RANGE_DAYS = 1_100;
+const EARLIEST_DATE = "2008-01-01";
+
 export const rangeQuerySchema = z
   .object({
-    from: isoDate,
+    from: isoDate.refine((value) => value >= EARLIEST_DATE, `from must be on or after ${EARLIEST_DATE}`),
     to: isoDate,
     store: storeSchema.optional(),
     appVersion: z.string().max(64).optional(),
@@ -33,6 +39,10 @@ export const rangeQuerySchema = z
   .refine((value) => value.from <= value.to, {
     message: "from must be on or before to",
     path: ["from"],
+  })
+  .refine((value) => (Date.parse(value.to) - Date.parse(value.from)) / 86_400_000 <= MAX_RANGE_DAYS, {
+    message: `the range may cover at most ${MAX_RANGE_DAYS} days`,
+    path: ["to"],
   });
 
 export type RangeQuery = z.infer<typeof rangeQuerySchema>;
@@ -77,7 +87,13 @@ export type CreateAppRequest = z.infer<typeof createAppSchema>;
  */
 export const googleCredentialsSchema = z.union([
   z.object({ useX3mServiceAccount: z.literal(true) }),
-  z.object({ serviceAccountJson: z.string().min(20).max(20_000) }),
+  z.object({
+    serviceAccountJson: z
+      .string()
+      .min(20)
+      .max(20_000)
+      .refine(isValidServiceAccountKey, "must be a Google service-account key (type \"service_account\")"),
+  }),
 ]);
 
 export const appleCredentialsSchema = z.object({
@@ -104,13 +120,15 @@ export interface AppDto {
   androidPackage: string | null;
   appleAppId: string | null;
   playReportsBucket: string | null;
+  /** True when Loomit registered the store identifiers; required for X3M's Google account. */
+  identityVerified: boolean;
   connections: ConnectionDto[];
 }
 
 export const uploadRequestSchema = z.object({
   fileName: z.string().trim().min(1).max(255),
   platform: z.enum(["android", "ios"]),
-  byteSize: z.number().int().positive().max(50_000_000),
+  byteSize: z.number().int().positive().max(50_000_000, "Files are limited to 50 MB; split larger exports by month."),
 });
 
 export interface AppsResponse {
@@ -334,6 +352,17 @@ export const linkExperimentSchema = z
       if (value.arms.some((arm) => !arm.values?.length)) {
         context.addIssue({ code: "custom", message: "every arm needs dimension values", path: ["arms"] });
       }
+    }
+    const span = (start: string, end: string | undefined) =>
+      (Date.parse(end ?? new Date().toISOString()) - Date.parse(start)) / 86_400_000;
+    if (value.startAt < EARLIEST_DATE || span(value.startAt, value.endAt) > 366) {
+      context.addIssue({ code: "custom", message: "the experiment window must start after 2008 and last at most 366 days", path: ["startAt"] });
+    }
+    if (
+      value.baselineStart &&
+      (value.baselineStart < EARLIEST_DATE || span(value.baselineStart, value.baselineEnd) > 366)
+    ) {
+      context.addIssue({ code: "custom", message: "the baseline window must start after 2008 and last at most 366 days", path: ["baselineStart"] });
     }
     if (value.attributionMode === "pre_post" && (!value.baselineStart || !value.baselineEnd)) {
       context.addIssue({ code: "custom", message: "pre_post attribution needs a baseline window", path: ["baselineStart"] });

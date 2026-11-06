@@ -40,12 +40,25 @@ describe("repositories", () => {
     const secrets = testSecretStore(db.pool);
     const seed = await seedConnectedApp(db.pool, secrets);
     const connection = await withScope(db.pool, SYSTEM, (client) => getConnection(client, seed.apple.id));
-    await expect(tokenForConnection(secrets, { ...connection!, secret_ref: null })).rejects.toThrow("no stored credentials");
+    await expect(tokenForConnection(secrets, { ...connection!, secret_ref: null }, { identity_verified: true })).rejects.toThrow("no stored credentials");
     await secrets.put(seed.tenant.id, seed.appleRef, { issuerId: "only" });
-    await expect(tokenForConnection(secrets, connection!)).rejects.toThrow("missing or malformed");
+    await expect(tokenForConnection(secrets, connection!, { identity_verified: true })).rejects.toThrow("missing or malformed");
     await withScope(db.pool, SYSTEM, (client) =>
       markConnection(client, seed.apple.id, { status: "disabled", error: "off" }),
     );
     expect((await withScope(db.pool, SYSTEM, (client) => getConnection(client, seed.apple.id)))?.status).toBe("disabled");
+  });
+
+  it("caps daily classification by review count as well as cost", async () => {
+    const secrets = testSecretStore(db.pool);
+    const seed = await seedConnectedApp(db.pool, secrets);
+    const { addSpend, remainingBudget } = await import("@/server/repo/rollups");
+    await withScope(db.pool, SYSTEM, async (client) => {
+      expect(await remainingBudget(client, seed.tenant.id, 100)).toBe(5);
+      await addSpend(client, { tenantId: seed.tenant.id, costUsd: 0, reviews: 100 });
+      expect(await remainingBudget(client, seed.tenant.id, 100)).toBe(0);
+      expect(await remainingBudget(client, seed.tenant.id, 1000)).toBe(5);
+      expect(await remainingBudget(client, "00000000-0000-0000-0000-000000000000")).toBe(0);
+    });
   });
 });

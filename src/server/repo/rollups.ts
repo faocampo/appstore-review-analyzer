@@ -146,13 +146,24 @@ export async function addSpend(
   );
 }
 
-export async function remainingBudget(client: Client, tenantId: string): Promise<number> {
-  const { rows } = await client.query<{ remaining: string }>(
-    `select t.daily_budget_usd - coalesce(s.cost_usd, 0) as remaining
+/**
+ * What is left of a tenant's daily classification allowance. Both the USD
+ * budget and a daily review cap apply, so spend stays bounded even when a
+ * provider reports no cost.
+ */
+export async function remainingBudget(
+  client: Client,
+  tenantId: string,
+  dailyReviewCap: number = Number.parseInt(process.env.DAILY_REVIEW_CAP ?? "", 10) || 20_000,
+): Promise<number> {
+  const { rows } = await client.query<{ remaining: string; reviews: number }>(
+    `select t.daily_budget_usd - coalesce(s.cost_usd, 0) as remaining, coalesce(s.reviews, 0)::int as reviews
      from tenant t
      left join classification_spend s on s.tenant_id = t.id and s.day = (now() at time zone 'UTC')::date
      where t.id = $1`,
     [tenantId],
   );
-  return Number(rows[0]?.remaining ?? 0);
+  const row = rows[0];
+  if (!row || row.reviews >= dailyReviewCap) return 0;
+  return Number(row.remaining);
 }

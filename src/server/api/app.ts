@@ -25,7 +25,7 @@ import { openApiDocument } from "@/server/api/openapi";
 import { pendingMigrations } from "@/server/db/migrate";
 import { SYSTEM, withScope, type Client, type Pool } from "@/server/db/pool";
 import { guardrailView, linkExperiment } from "@/server/guardrails/evaluate";
-import { tokenForConnection, x3mServiceAccountEmail } from "@/server/ingestion/credentials";
+import { UNVERIFIED_APP, tokenForConnection, x3mServiceAccountEmail } from "@/server/ingestion/credentials";
 import type { ObjectStorage } from "@/server/ingestion/imports";
 import { QUEUES, type Sender } from "@/server/jobs/queue";
 import { metrics, registry } from "@/server/metrics";
@@ -54,6 +54,8 @@ export interface ApiDeps {
   minN: number;
   /** Max requests per tenant per minute (per pod). */
   rateLimitPerMinute?: number;
+  /** Trust X-Forwarded-* (true behind the Istio gateway). */
+  trustProxy?: boolean;
   logger?: boolean;
 }
 
@@ -81,6 +83,9 @@ function tenantLimiter(limit: number) {
     const current = windows.get(key);
     if (!current || now - current.start >= 60_000) {
       windows.set(key, { start: now, count: 1 });
+      if (windows.size > 10_000) {
+        for (const [entryKey, entry] of windows) if (now - entry.start >= 60_000) windows.delete(entryKey);
+      }
       return true;
     }
     current.count += 1;
@@ -93,7 +98,7 @@ export async function buildApi(deps: ApiDeps): Promise<FastifyInstance> {
     logger: deps.logger ?? false,
     genReqId: () => randomUUID(),
     bodyLimit: 1_048_576,
-    trustProxy: true,
+    trustProxy: deps.trustProxy ?? true,
   });
   const allow = tenantLimiter(deps.rateLimitPerMinute ?? 600);
 
@@ -139,15 +144,21 @@ export async function buildApi(deps: ApiDeps): Promise<FastifyInstance> {
   app.get("/v1/openapi.json", async () => openApiDocument);
 
   // ---- authenticated v1 ------------------------------------------------
+  // Authenticate by the matched route pattern, not the raw URL: the router
+  // decodes percent-encoding, so "/%761/apps" must not bypass this hook.
+  const PUBLIC_ROUTES = new Set(["/healthz", "/readyz", "/metrics", "/v1/openapi.json"]);
   app.addHook("onRequest", async (request) => {
-    if (!request.url.startsWith("/v1/") || request.url.startsWith("/v1/openapi.json")) return;
     if (request.method === "OPTIONS") return;
+    const route = request.routeOptions.url;
+    if (route && PUBLIC_ROUTES.has(route)) return;
+    if (!route) return; // unmatched: the router answers 404
     request.principal = await authenticate(request.headers.authorization, deps.verify, deps.claims);
   });
 
   /** Runs `work` scoped to the acting tenant (RLS enforced). */
   async function asTenant<T>(request: FastifyRequest, work: (client: Client, tenantId: string, principal: Principal) => Promise<T>): Promise<T> {
-    const principal = request.principal!;
+    const principal = request.principal;
+    if (!principal) throw new PublicError("A bearer token is required.", 401);
     const publisherId = actingPublisher(principal, request.headers["x-loomit-publisher-id"] as string | undefined);
     if (!allow(publisherId)) throw new PublicError("Too many requests for this publisher. Try again shortly.", 429);
     const tenant = await withScope(deps.pool, SYSTEM, (client) =>
@@ -180,7 +191,16 @@ export async function buildApi(deps: ApiDeps): Promise<FastifyInstance> {
     const body = createAppSchema.parse(request.body);
     const created = await asTenant(request, async (client, tenantId, principal) => {
       requireRole(principal, ["publisher", "x3m_admin", "service"]);
-      const row = await upsertApp(client, tenantId, body);
+      const trusted = principal.roles.has("service") || principal.roles.has("x3m_admin");
+      let row;
+      try {
+        row = await upsertApp(client, tenantId, body, trusted);
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505") {
+          throw new PublicError("This package or Play reports bucket is already registered to another app.", 409);
+        }
+        throw error;
+      }
       await audit(client, { tenantId, actor: principal.subject, action: "app.upsert", target: row.id });
       return toAppDto(row, []);
     });
@@ -201,6 +221,9 @@ export async function buildApi(deps: ApiDeps): Promise<FastifyInstance> {
     const result = await asTenant(request, async (client, tenantId, principal) => {
       requireRole(principal, ["publisher", "x3m_admin"]);
       const row = await requireApp(client, request.params.appId);
+      if ("useX3mServiceAccount" in credentials && !row.identity_verified) {
+        throw new PublicError(UNVERIFIED_APP, 409);
+      }
       const ref = secretRef(tenantId, row.id, store);
       await deps.secrets.put(tenantId, ref, credentials);
       const connection = await upsertConnection(client, { tenantId, appId: row.id, store, secretRef: ref });
@@ -212,14 +235,14 @@ export async function buildApi(deps: ApiDeps): Promise<FastifyInstance> {
 
   app.post<{ Params: { appId: string; store: string } }>("/v1/apps/:appId/connections/:store/verify", async (request) => {
     const store = storeSchema.parse(request.params.store);
-    const connection = await asTenant(request, async (client) => {
-      await requireApp(client, request.params.appId);
-      const found = (await listConnections(client, [request.params.appId])).find((row) => row.store === store);
-      if (!found) throw new PublicError("Connect the store first.", 404);
-      return found;
+    const { connection, app: appRow } = await asTenant(request, async (client) => {
+      const found = await requireApp(client, request.params.appId);
+      const connectionRow = (await listConnections(client, [request.params.appId])).find((row) => row.store === store);
+      if (!connectionRow) throw new PublicError("Connect the store first.", 404);
+      return { connection: connectionRow, app: found };
     });
     try {
-      await tokenForConnection(deps.secrets, connection);
+      await tokenForConnection(deps.secrets, connection, appRow);
     } catch (error) {
       const message = error instanceof PublicError ? error.message : "Verification failed.";
       await withScope(deps.pool, SYSTEM, (client) => markConnection(client, connection.id, { status: "error", error: message }));
@@ -294,7 +317,7 @@ export async function buildApi(deps: ApiDeps): Promise<FastifyInstance> {
     asTenant(request, async (client): Promise<ImportResponse> => {
       const { rows } = await client.query<{ id: string; status: ImportResponse["status"]; imported_at: Date | null; error: string | null }>(
         "select id, status, imported_at, error from upload where id = $1 and app_id = $2",
-        [z.uuid().parse(request.params.uploadId), request.params.appId],
+        [z.uuid().parse(request.params.uploadId), z.uuid().parse(request.params.appId)],
       );
       if (!rows[0]) throw new PublicError("Upload not found.", 404);
       return { uploadId: rows[0].id, status: rows[0].status, importedAt: rows[0].imported_at?.toISOString() ?? null, error: rows[0].error };
@@ -426,7 +449,15 @@ export async function buildApi(deps: ApiDeps): Promise<FastifyInstance> {
       await audit(client, { tenantId: null, actor: principal.subject, action: "tenant.offboard", target: tenantId });
     });
     const publisherId = actingPublisher(request.principal!, request.headers["x-loomit-publisher-id"] as string | undefined);
-    await withScope(deps.pool, SYSTEM, (client) => client.query("delete from tenant where loomit_publisher_id = $1", [publisherId]));
+    const tenantId = await withScope(deps.pool, SYSTEM, async (client) => {
+      const { rows } = await client.query<{ id: string }>(
+        "delete from tenant where loomit_publisher_id = $1 returning id",
+        [publisherId],
+      );
+      return rows[0]?.id ?? null;
+    });
+    // Uploaded CSVs hold raw review text; remove them with the tenant.
+    if (tenantId && deps.uploads) await deps.uploads.deletePrefix(`uploads/${tenantId}/`);
     return reply.status(204).send();
   });
 

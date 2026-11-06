@@ -659,6 +659,7 @@ function sampleApp(id: string): AppDto {
     androidPackage: sparse ? "com.example.pebblesort" : "com.example.tidepool",
     appleAppId: sparse ? null : "1000000001",
     playReportsBucket: sparse ? null : "pubsite_prod_sample-0001",
+    identityVerified: true,
     connections: [
       {
         store: "google_play",
@@ -722,6 +723,7 @@ export async function fixtureCreateApp(input: CreateAppRequest): Promise<AppDto>
     androidPackage: input.androidPackage ?? null,
     appleAppId: input.appleAppId ?? null,
     playReportsBucket: input.playReportsBucket ?? null,
+    identityVerified: false,
     connections: [],
   };
   ensureApps().set(id, app);

@@ -99,7 +99,7 @@ export async function syncConnection(
   });
 
   try {
-    const token = await tokenForConnection(deps.secrets, connection);
+    const token = await tokenForConnection(deps.secrets, connection, app);
     const { result, coverageFrom } = await fetchForConnection(app, connection, token, mode, now);
     metrics.ingestionPages.inc({ store: connection.store }, result.coverage.pagesFetched ?? 0);
 

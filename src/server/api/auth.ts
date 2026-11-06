@@ -27,11 +27,26 @@ export function createVerifier(
   if (config.AUTH_MODE === "oidc") {
     const keySet = jwks ?? createRemoteJWKSet(new URL(config.OIDC_JWKS_URL ?? ""));
     return async (token) =>
-      (await jwtVerify(token, keySet, { issuer: config.OIDC_ISSUER, audience: config.OIDC_AUDIENCE })).payload;
+      (
+        await jwtVerify(token, keySet, {
+          issuer: config.OIDC_ISSUER,
+          audience: config.OIDC_AUDIENCE,
+          algorithms: ["RS256", "ES256", "PS256"],
+          requiredClaims: ["exp", "sub"],
+          maxTokenAge: "24h",
+        })
+      ).payload;
   }
   const secret = new TextEncoder().encode(config.DEV_JWT_SECRET ?? "");
   return async (token) =>
-    (await jwtVerify(token, secret, { algorithms: ["HS256"], issuer: "reviewsignal-dev", audience: "reviewsignal" })).payload;
+    (
+      await jwtVerify(token, secret, {
+        algorithms: ["HS256"],
+        issuer: "reviewsignal-dev",
+        audience: "reviewsignal",
+        requiredClaims: ["exp", "sub"],
+      })
+    ).payload;
 }
 
 const ROLES = new Set<Role>(["publisher", "x3m_admin", "service"]);
@@ -69,10 +84,15 @@ export async function authenticate(
  * Which Loomit publisher a request acts for. Publishers act for themselves;
  * the Loomit backend (service) and X3M admins name the publisher explicitly.
  */
+const PUBLISHER_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+
 export function actingPublisher(principal: Principal, headerValue: string | undefined): string {
   if (principal.roles.has("service") || principal.roles.has("x3m_admin")) {
     const value = headerValue?.trim();
-    if (value) return value;
+    if (value) {
+      if (!PUBLISHER_ID.test(value)) throw new PublicError("X-Loomit-Publisher-Id is not a valid publisher id.", 400);
+      return value;
+    }
     if (principal.publisherId) return principal.publisherId;
     throw new PublicError("Set the X-Loomit-Publisher-Id header.", 400);
   }
