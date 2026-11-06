@@ -109,8 +109,11 @@ jobs:
           done
 
       - name: Check alert rules with promtool
+        # alerts.yaml is a PrometheusRule resource; promtool checks its spec.
         run: |
-          docker run --rm -v "$PWD/deploy/prometheus:/rules" --entrypoint promtool prom/prometheus:v3.5.0 check rules /rules/alerts.yaml
+          mkdir -p "$RUNNER_TEMP/rules"
+          yq '.spec' deploy/prometheus/alerts.yaml > "$RUNNER_TEMP/rules/alerts.yaml"
+          docker run --rm -v "$RUNNER_TEMP/rules:/rules" --entrypoint promtool prom/prometheus:v3.5.0 check rules /rules/alerts.yaml
 
       - name: Build the image
         run: docker build --build-arg NEXT_PUBLIC_API_URL=https://reviewsignal.example.invalid -t reviewsignal:ci .
