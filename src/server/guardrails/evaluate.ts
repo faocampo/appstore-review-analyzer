@@ -27,7 +27,10 @@ export interface RuleThresholds {
  * direction. They are starting points to be calibrated by the backtest
  * (plan §3.4) and can be overridden per tenant or app in guardrail_rule.
  */
-export const DEFAULT_RULES: Record<GuardrailMetric, RuleThresholds & { label: string; harm: "increase" | "decrease"; unit: string }> = {
+export const DEFAULT_RULES: Record<
+  GuardrailMetric,
+  RuleThresholds & { label: string; harm: GuardrailMetricResult["harm"]; unit: GuardrailMetricResult["unit"] }
+> = {
   G1: { label: "Ad complaints among negative reviews", harm: "increase", unit: "share", warn: 0.05, breach: 0.1, minN: 20 },
   G2: { label: "Average sentiment (0–4)", harm: "decrease", unit: "points", warn: 0.15, breach: 0.3, minN: 20 },
   G3: { label: "Ad-complaint reviews per 100k DAU", harm: "increase", unit: "relative", warn: 0.25, breach: 0.5, minN: 10 },
@@ -140,6 +143,8 @@ export function evaluateMetrics(
   ): GuardrailMetricResult => ({
     metric,
     label: DEFAULT_RULES[metric].label,
+    harm: DEFAULT_RULES[metric].harm,
+    unit: DEFAULT_RULES[metric].unit,
     status: "insufficient",
     ...values,
     delta: null,
@@ -155,6 +160,8 @@ export function evaluateMetrics(
   ): GuardrailMetricResult => ({
     metric,
     label: DEFAULT_RULES[metric].label,
+    harm: DEFAULT_RULES[metric].harm,
+    unit: DEFAULT_RULES[metric].unit,
     status: statusFor(result, DEFAULT_RULES[metric].harm, rules[metric]),
     ...values,
     delta: round(result.delta),
@@ -255,15 +262,16 @@ async function findConfounders(
   const confounders: Confounder[] = [];
   if (experiment.dimension !== "app_version") {
     const { rows } = await client.query<{ app_version: string; first_seen: Date }>(
-      `select app_version, min(created_at) as first_seen from review
-       where app_id = $1 and app_version is not null group by app_version
-       having min(created_at) between $2 and $3 order by first_seen`,
+      `select app_version, first_seen from app_version_seen
+       where app_id = $1 and first_seen between $2 and $3 order by first_seen`,
       [experiment.app_id, new Date(windows[0].start.getTime() - 86_400_000), windows[0].end],
     );
     for (const row of rows) {
       confounders.push({
         kind: "release",
         detail: `Version ${row.app_version} first appeared in reviews on ${row.first_seen.toISOString().slice(0, 10)}, inside the experiment window.`,
+        day: row.first_seen.toISOString().slice(0, 10),
+        appVersion: row.app_version,
       });
     }
   }
@@ -372,7 +380,13 @@ export async function evaluateExperiment(
     const value = totals.daily.get(day);
     return value && value.negative ? round(value.adsNegative / value.negative) : null;
   };
-  const series = seriesDays.map((day) => ({ day, test: share(test, day), control: share(control, day) }));
+  const series = seriesDays.map((day) => ({
+    day,
+    test: share(test, day),
+    control: share(control, day),
+    testN: test.daily.get(day)?.negative ?? 0,
+    controlN: control.daily.get(day)?.negative ?? 0,
+  }));
 
   const { rows: inserted } = await client.query<{ id: string }>(
     `insert into guardrail_evaluation (tenant_id, experiment_id, model_version, status, window_start, window_end, results, confounders, series)
@@ -429,6 +443,8 @@ export async function guardrailView(client: Client, loomitExperimentId: string):
     status: latest?.status ?? "insufficient",
     attributionMode: experiment.attribution_mode,
     attributionLabel: ATTRIBUTION_LABELS[experiment.attribution_mode],
+    dimension: experiment.dimension,
+    arms: experiment.arms.map((arm) => ({ key: arm.key, role: arm.role, values: arm.values ?? [], dau: arm.dau ?? null })),
     modelVersion: latest?.model_version ?? null,
     window: {
       start: (latest?.window_start ?? experiment.start_at).toISOString(),

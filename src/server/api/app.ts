@@ -15,14 +15,17 @@ import {
   storeSchema,
   timeseriesQuerySchema,
   uploadRequestSchema,
+  type ImportResponse,
+  type OnboardingResponse,
   type TenantHealthDto,
+  type UploadResponse,
 } from "@/server/api/contracts";
 import { actingPublisher, authenticate, type Principal, type Role, type TokenVerifier } from "@/server/api/auth";
 import { openApiDocument } from "@/server/api/openapi";
 import { pendingMigrations } from "@/server/db/migrate";
 import { SYSTEM, withScope, type Client, type Pool } from "@/server/db/pool";
 import { guardrailView, linkExperiment } from "@/server/guardrails/evaluate";
-import { tokenForConnection } from "@/server/ingestion/credentials";
+import { tokenForConnection, x3mServiceAccountEmail } from "@/server/ingestion/credentials";
 import type { ObjectStorage } from "@/server/ingestion/imports";
 import { QUEUES, type Sender } from "@/server/jobs/queue";
 import { metrics, registry } from "@/server/metrics";
@@ -159,6 +162,12 @@ export async function buildApi(deps: ApiDeps): Promise<FastifyInstance> {
     return found;
   }
 
+  app.get("/v1/onboarding", async (): Promise<OnboardingResponse> => ({
+    googleServiceAccountEmail: x3mServiceAccountEmail(),
+    googlePermissions: ["View app information (read-only)", "Reply to reviews: off", "Download bulk reports (for history import)"],
+    appleKeyRole: "Customer Support",
+  }));
+
   app.get("/v1/apps", async (request) =>
     asTenant(request, async (client) => {
       const apps = await listApps(client);
@@ -260,11 +269,13 @@ export async function buildApi(deps: ApiDeps): Promise<FastifyInstance> {
       return { id, key };
     });
     const expiresIn = 900;
-    return reply.status(201).send({
+    const response: UploadResponse = {
       uploadId: created.id,
       uploadUrl: await uploads.presignPut(created.key, "text/csv", expiresIn),
+      headers: { "Content-Type": "text/csv" },
       expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
-    });
+    };
+    return reply.status(201).send(response);
   });
 
   app.post<{ Params: { appId: string } }>("/v1/apps/:appId/imports", async (request, reply) => {
@@ -275,8 +286,20 @@ export async function buildApi(deps: ApiDeps): Promise<FastifyInstance> {
       if (!rowCount) throw new PublicError("Upload not found.", 404);
     });
     await deps.jobs.send(QUEUES.importUpload, { uploadId: body.uploadId }, { singletonKey: body.uploadId });
-    return reply.status(202).send({ queued: true });
+    const response: ImportResponse = { uploadId: body.uploadId, status: "pending", importedAt: null, error: null };
+    return reply.status(202).send(response);
   });
+
+  app.get<{ Params: { appId: string; uploadId: string } }>("/v1/apps/:appId/uploads/:uploadId", async (request) =>
+    asTenant(request, async (client): Promise<ImportResponse> => {
+      const { rows } = await client.query<{ id: string; status: ImportResponse["status"]; imported_at: Date | null; error: string | null }>(
+        "select id, status, imported_at, error from upload where id = $1 and app_id = $2",
+        [z.uuid().parse(request.params.uploadId), request.params.appId],
+      );
+      if (!rows[0]) throw new PublicError("Upload not found.", 404);
+      return { uploadId: rows[0].id, status: rows[0].status, importedAt: rows[0].imported_at?.toISOString() ?? null, error: rows[0].error };
+    }),
+  );
 
   app.post<{ Params: { appId: string } }>("/v1/apps/:appId/backfill/play-reports", async (request, reply) => {
     const body = reportsSchema.parse(request.body ?? {});
@@ -301,7 +324,7 @@ export async function buildApi(deps: ApiDeps): Promise<FastifyInstance> {
     const query = reasonsQuery.parse(request.query);
     return asTenant(request, async (client) => {
       await requireApp(client, request.params.appId);
-      return panel.reasons(client, request.params.appId, query);
+      return panel.reasons(client, request.params.appId, query, deps.minN);
     });
   });
 

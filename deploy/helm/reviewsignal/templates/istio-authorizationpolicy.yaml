@@ -1,0 +1,65 @@
+{{- if and .Values.istio.enabled .Values.istio.authorizationPolicy.enabled }}
+{{- $ap := .Values.istio.authorizationPolicy }}
+# API: only the Loomit console gateway and the Loomit backend reach /v1/*;
+# only Prometheus reaches /metrics. Any other request is denied by the mesh
+# before it reaches the service. Kubelet probes are rewritten by the sidecar
+# and are not subject to this policy. End-user authorization (tenant, roles)
+# is enforced by the API on the Loomit JWT.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "reviewsignal.fullname" . }}-api
+  labels:
+    {{- include "reviewsignal.componentLabels" (list . "api") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "reviewsignal.componentSelectorLabels" (list . "api") | nindent 6 }}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              {{- toYaml (required "istio.authorizationPolicy.apiPrincipals must not be empty" $ap.apiPrincipals) | nindent 14 }}
+      to:
+        - operation:
+            ports: [{{ .Values.api.port | quote }}]
+            paths: ["/v1/*"]
+    {{- with $ap.prometheusPrincipals }}
+    - from:
+        - source:
+            principals:
+              {{- toYaml . | nindent 14 }}
+      to:
+        - operation:
+            ports: [{{ $.Values.api.port | quote }}]
+            methods: ["GET"]
+            paths: ["/metrics"]
+    {{- end }}
+---
+# Worker: serves only health and metrics; only Prometheus may scrape it.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "reviewsignal.fullname" . }}-worker
+  labels:
+    {{- include "reviewsignal.componentLabels" (list . "worker") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "reviewsignal.componentSelectorLabels" (list . "worker") | nindent 6 }}
+  # An ALLOW policy without rules denies every request.
+  action: ALLOW
+  {{- with $ap.prometheusPrincipals }}
+  rules:
+    - from:
+        - source:
+            principals:
+              {{- toYaml . | nindent 14 }}
+      to:
+        - operation:
+            ports: [{{ $.Values.worker.metricsPort | quote }}]
+            methods: ["GET"]
+            paths: ["/metrics"]
+  {{- end }}
+{{- end }}

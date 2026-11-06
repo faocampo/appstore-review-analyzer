@@ -1,3 +1,5 @@
+import type { PgBoss } from "pg-boss";
+
 import { SYSTEM, withScope, type Pool } from "@/server/db/pool";
 import { metrics } from "@/server/metrics";
 
@@ -29,4 +31,32 @@ export async function refreshGauges(pool: Pool): Promise<void> {
       metrics.coverageDays.set({ status }, coverage.rows.find((row) => row.status === status)?.count ?? 0);
     }
   });
+}
+
+/** Sets reviewsignal_queue_depth from pg-boss queue statistics. */
+export async function refreshQueueDepth(boss: Pick<PgBoss, "getQueues">): Promise<void> {
+  const queues = await boss.getQueues();
+  for (const queue of queues) {
+    metrics.queueDepth.set({ queue: queue.name }, queue.queuedCount ?? 0);
+  }
+}
+
+/**
+ * Refreshes fleet gauges on a timer in every worker replica, so each
+ * replica exports current values (a single scheduled job would leave the
+ * other replicas exporting stale ones). Returns a stop function.
+ */
+export function startGaugeLoop(
+  pool: Pool,
+  boss: Pick<PgBoss, "getQueues">,
+  intervalMs = 60_000,
+): () => void {
+  const tick = () =>
+    Promise.all([refreshGauges(pool), refreshQueueDepth(boss)]).catch((error) =>
+      console.error("[reviewsignal] gauge refresh failed", error),
+    );
+  void tick();
+  const timer = setInterval(tick, intervalMs);
+  timer.unref();
+  return () => clearInterval(timer);
 }

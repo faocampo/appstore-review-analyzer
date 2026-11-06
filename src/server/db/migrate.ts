@@ -28,6 +28,8 @@ export async function migrate(
       if (done.has(migration.name)) continue;
       try {
         await client.query("begin");
+        // Data backfills in migrations must see every tenant's rows.
+        await client.query("select set_config('app.bypass_rls', 'on', true)");
         await client.query(migration.sql);
         await client.query("insert into schema_migrations (name) values ($1)", [migration.name]);
         await client.query("commit");

@@ -6,6 +6,7 @@ import type {
   ReviewDto,
   ReviewsResponse,
   TimeseriesResponse,
+  TimeseriesTotals,
   VersionsResponse,
 } from "@/server/api/contracts";
 import type { Client } from "@/server/db/pool";
@@ -64,6 +65,25 @@ async function coverageMap(client: Client, appId: string, from: string, to: stri
   return new Map(rows.map((row) => [`${row.store}:${row.day}`, row.status]));
 }
 
+/** Mean expected sentiment with a 95% normal interval; nulls below min N. */
+function summarize(
+  bucket: { n: number; sumEv: number; sumEv2: number; sumRating: number; negative: number; adsNegative: number },
+  minN: number,
+): TimeseriesTotals {
+  const sufficient = bucket.n >= minN;
+  const mean = bucket.n ? bucket.sumEv / bucket.n : 0;
+  const variance = bucket.n > 1 ? Math.max(0, (bucket.sumEv2 - bucket.n * mean * mean) / (bucket.n - 1)) : 0;
+  const halfWidth = 1.96 * Math.sqrt(variance / Math.max(bucket.n, 1));
+  return {
+    n: bucket.n,
+    averageSentiment: sufficient ? round(mean) : null,
+    sentimentCi: sufficient ? [round(Math.max(0, mean - halfWidth)), round(Math.min(4, mean + halfWidth))] : null,
+    averageRating: sufficient ? round(bucket.sumRating / bucket.n) : null,
+    negativeShare: sufficient ? round(bucket.negative / bucket.n) : null,
+    adsNegativeShare: sufficient ? (bucket.negative ? round(bucket.adsNegative / bucket.negative) : 0) : null,
+  };
+}
+
 function bucketStart(day: string, granularity: "day" | "week"): string {
   if (granularity === "day") return day;
   const date = new Date(`${day}T00:00:00Z`);
@@ -117,30 +137,40 @@ export async function timeseries(
     bucket.adsNegative += row.ads_negative;
   }
 
-  const points = [...buckets.entries()].map(([period, bucket]) => {
-    const sufficient = bucket.n >= minN;
-    const mean = bucket.n ? bucket.sumEv / bucket.n : 0;
-    const variance = bucket.n > 1 ? Math.max(0, (bucket.sumEv2 - bucket.n * mean * mean) / (bucket.n - 1)) : 0;
-    const halfWidth = 1.96 * Math.sqrt(variance / Math.max(bucket.n, 1));
-    return {
-      period,
-      n: bucket.n,
-      averageSentiment: sufficient ? round(mean) : null,
-      sentimentCi: sufficient ? ([round(Math.max(0, mean - halfWidth)), round(Math.min(4, mean + halfWidth))] as [number, number]) : null,
-      averageRating: sufficient ? round(bucket.sumRating / bucket.n) : null,
-      negativeShare: sufficient ? round(bucket.negative / bucket.n) : null,
-      adsNegativeShare: sufficient && bucket.negative ? round(bucket.adsNegative / bucket.negative) : sufficient ? 0 : null,
-      coverage: bucket.coverage,
-    };
-  });
+  const points = [...buckets.entries()].map(([period, bucket]) => ({
+    period,
+    ...summarize(bucket, minN),
+    coverage: bucket.coverage,
+  }));
 
   const { rows: releases } = await client.query<{ app_version: string; first_seen: string }>(
-    `select app_version, to_char(min(created_at) at time zone 'UTC', 'YYYY-MM-DD') as first_seen
-     from review where app_id = $1 and app_version is not null${query.store ? " and store = $4" : ""}
-     group by app_version having min(created_at) between $2::date and ($3::date + 1)
+    `select app_version, to_char(first_seen at time zone 'UTC', 'YYYY-MM-DD') as first_seen
+     from app_version_seen where app_id = $1 and first_seen >= $2::date and first_seen < ($3::date + 1)
      order by first_seen`,
-    query.store ? [appId, query.from, query.to, query.store] : [appId, query.from, query.to],
+    [appId, query.from, query.to],
   );
+
+  const { rows: dimensionRows } = modelVersion
+    ? await client.query<{ territories: string[] | null; versions: string[] | null }>(
+        `select array_agg(distinct territory) filter (where territory <> '') as territories,
+           array_agg(distinct app_version) filter (where app_version <> '') as versions
+         from review_daily_rollup where app_id = $1 and model_version = $2 and day between $3::date and $4::date`,
+        [appId, modelVersion, query.from, query.to],
+      )
+    : { rows: [] };
+
+  const total = rows.reduce(
+    (sum, row) => ({
+      n: sum.n + row.n,
+      sumEv: sum.sumEv + Number(row.sum_ev),
+      sumEv2: sum.sumEv2 + Number(row.sum_ev2),
+      sumRating: sum.sumRating + Number(row.sum_rating),
+      negative: sum.negative + row.negative,
+      adsNegative: sum.adsNegative + row.ads_negative,
+    }),
+    { n: 0, sumEv: 0, sumEv2: 0, sumRating: 0, negative: 0, adsNegative: 0 },
+  );
+  const totals = summarize(total, minN);
 
   return {
     appId,
@@ -149,8 +179,13 @@ export async function timeseries(
     granularity: query.granularity,
     modelVersion,
     minN,
+    totals,
     points,
     releases: releases.map((row) => ({ appVersion: row.app_version, firstSeen: row.first_seen })),
+    dimensions: {
+      territories: (dimensionRows[0]?.territories ?? []).sort(),
+      appVersions: (dimensionRows[0]?.versions ?? []).sort(),
+    },
   };
 }
 
@@ -160,31 +195,45 @@ const GROUP_SQL: Record<ReasonsResponse["group"], string> = {
   positive: "c.sentiment_score >= 3",
 };
 
+const GROUP_COLUMN: Record<ReasonsResponse["group"], string> = {
+  negative: "negative_reason_counts",
+  neutral: "neutral_reason_counts",
+  positive: "positive_reason_counts",
+};
+
+/** Reason ranking and weekly trend, read from rollups only. */
 export async function reasons(
   client: Client,
   appId: string,
   query: RangeQuery & { group: ReasonsResponse["group"] },
+  minN: number,
 ): Promise<ReasonsResponse> {
-  const modelVersion = await currentModelVersion(client, appId);
-  const where = filters(query, 5, "r");
-  const base = `from review r join classification c on c.review_id = r.id and c.text_hash = r.text_hash and c.model_version = $2
-     where r.app_id = $1 and r.created_at >= $3::date and r.created_at < ($4::date + 1) and ${GROUP_SQL[query.group]}${where.sql}`;
-  const params = [appId, modelVersion ?? "", query.from, query.to, ...where.values];
+  const modelVersion = (await currentModelVersion(client, appId)) ?? "";
+  const where = filters(query, 5);
+  const params = [appId, modelVersion, query.from, query.to, ...where.values];
+  const scope = `from review_daily_rollup where app_id = $1 and model_version = $2 and day between $3::date and $4::date${where.sql}`;
 
   const { rows } = await client.query<{ reason: ReasonKey; count: number }>(
-    `select c.primary_reason as reason, count(*)::int as count ${base} group by 1 order by 2 desc`,
+    `select key as reason, sum(value::int)::int as count from (select ${GROUP_COLUMN[query.group]} as counts ${scope}) r,
+       jsonb_each_text(r.counts) group by key order by count desc, key`,
     params,
   );
   const total = rows.reduce((sum, row) => sum + row.count, 0);
-  const { rows: subreasons } = await client.query<{ subreason: AdSubreasonKey; count: number }>(
-    `select c.ad_subreason as subreason, count(*)::int as count ${base} and c.ad_subreason is not null group by 1 order by 2 desc`,
-    params,
-  );
+  // Ad sub-reasons are only recorded for negative ad complaints.
+  const { rows: subreasons } =
+    query.group === "negative"
+      ? await client.query<{ subreason: AdSubreasonKey; count: number }>(
+          `select key as subreason, sum(value::int)::int as count from (select ad_subreason_counts as counts ${scope}) r,
+             jsonb_each_text(r.counts) group by key order by count desc, key`,
+          params,
+        )
+      : { rows: [] };
   const subTotal = subreasons.reduce((sum, row) => sum + row.count, 0);
   const top = rows.slice(0, 5).map((row) => row.reason);
   const { rows: trendRows } = await client.query<{ period: string; reason: ReasonKey; count: number }>(
-    `select to_char(date_trunc('week', r.created_at at time zone 'UTC'), 'YYYY-MM-DD') as period, c.primary_reason as reason, count(*)::int as count
-     ${base} and c.primary_reason = any($${params.length + 1}::text[]) group by 1, 2 order by 1`,
+    `select to_char(date_trunc('week', r.day), 'YYYY-MM-DD') as period, key as reason, sum(value::int)::int as count
+     from (select day, ${GROUP_COLUMN[query.group]} as counts ${scope}) r, jsonb_each_text(r.counts)
+     where key = any($${params.length + 1}::text[]) group by 1, 2 order by 1, 2`,
     [...params, top],
   );
   const trend = new Map<string, Partial<Record<ReasonKey, number>>>();
@@ -198,6 +247,7 @@ export async function reasons(
     from: query.from,
     to: query.to,
     group: query.group,
+    minN,
     total,
     reasons: rows.map((row) => ({
       reason: row.reason,
@@ -229,8 +279,8 @@ export async function versions(client: Client, appId: string, query: RangeQuery,
       )
     : { rows: [] };
   const { rows: firstSeen } = await client.query<{ app_version: string; first_seen: string }>(
-    `select app_version, to_char(min(created_at) at time zone 'UTC', 'YYYY-MM-DD') as first_seen
-     from review where app_id = $1 and app_version is not null group by app_version`,
+    `select app_version, to_char(first_seen at time zone 'UTC', 'YYYY-MM-DD') as first_seen
+     from app_version_seen where app_id = $1`,
     [appId],
   );
   const seen = new Map(firstSeen.map((row) => [row.app_version, row.first_seen]));
@@ -308,7 +358,8 @@ export async function reviewsPage(
        c.ad_subreason, c.model_version
      from review r
      left join classification c on c.review_id = r.id and c.text_hash = r.text_hash and c.model_version = $2
-     where r.app_id = $1 and r.created_at >= $3::date and r.created_at < ($4::date + 1)${where.sql}
+     where r.app_id = $1 and r.created_at >= ($3::date::timestamp at time zone 'UTC')
+       and r.created_at < (($4::date + 1)::timestamp at time zone 'UTC')${where.sql}
        ${clauses.length ? `and ${clauses.join(" and ")}` : ""}
      order by r.created_at desc, r.id desc
      limit $${params.length}`,

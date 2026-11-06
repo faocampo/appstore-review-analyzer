@@ -1,0 +1,97 @@
+# Argo CD Applications for ReviewSignal.
+#
+# - Staging syncs automatically from main (prune + self-heal).
+# - Production syncs manually: an operator reviews the diff in Argo CD and
+#   clicks Sync after the image tag in values-production.yaml was promoted by
+#   pull request. Both track main, so a chart change shows production as
+#   OutOfSync until someone syncs it on purpose.
+#
+# Migrations run as a PreSync hook (templates/migrations-job.yaml); a failed
+# migration fails the sync before any pod is replaced.
+#
+# PLACEHOLDER values: the AppProject ("loomit") and the destination cluster
+# names must match the Loomit Argo CD installation. The repository URL changes
+# if the repository moves to GitLab (docs/adr/0002-ci-platform.md).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: reviewsignal-staging
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: reviewsignal
+    app.kubernetes.io/part-of: loomit
+    environment: staging
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: loomit
+  source:
+    repoURL: https://github.com/faocampo/appstore-review-analyzer.git
+    targetRevision: main
+    path: deploy/helm/reviewsignal
+    helm:
+      releaseName: reviewsignal
+      valueFiles:
+        - values.yaml
+        - values-staging.yaml
+  destination:
+    # PLACEHOLDER: staging EKS cluster as registered in Argo CD.
+    name: eks-staging
+    namespace: reviewsignal
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - PruneLast=true
+    managedNamespaceMetadata:
+      labels:
+        # Use istio.io/rev=<revision> instead on revision-based Istio installs.
+        istio-injection: enabled
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+  revisionHistoryLimit: 10
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: reviewsignal-production
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: reviewsignal
+    app.kubernetes.io/part-of: loomit
+    environment: production
+  # No resources finalizer: deleting the Application must never cascade-delete
+  # production resources.
+spec:
+  project: loomit
+  source:
+    repoURL: https://github.com/faocampo/appstore-review-analyzer.git
+    targetRevision: main
+    path: deploy/helm/reviewsignal
+    helm:
+      releaseName: reviewsignal
+      valueFiles:
+        - values.yaml
+        - values-production.yaml
+  destination:
+    # PLACEHOLDER: production EKS cluster as registered in Argo CD.
+    name: eks-production
+    namespace: reviewsignal
+  syncPolicy:
+    # Manual sync: no `automated` block.
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - PruneLast=true
+    managedNamespaceMetadata:
+      labels:
+        # Use istio.io/rev=<revision> instead on revision-based Istio installs.
+        istio-injection: enabled
+  revisionHistoryLimit: 20

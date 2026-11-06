@@ -5,6 +5,7 @@ import { loadConfig } from "@/server/config";
 import { pendingMigrations } from "@/server/db/migrate";
 import { createPool } from "@/server/db/pool";
 import { createUploadsStorage, S3ObjectStorage } from "@/server/ingestion/imports";
+import { startGaugeLoop } from "@/server/jobs/gauges";
 import { createBoss, startWorkers } from "@/server/jobs/queue";
 import { registry } from "@/server/metrics";
 import { createSecretStore } from "@/server/secrets/store";
@@ -34,6 +35,8 @@ async function main(): Promise<void> {
     { sync: config.SYNC_CRON, evaluate: config.EVALUATE_CRON, export: config.EXPORT_CRON },
   );
 
+  const stopGauges = startGaugeLoop(pool, boss);
+
   const server = createServer(async (request, response) => {
     if (request.url === "/healthz") {
       response.writeHead(200, { "Content-Type": "application/json" }).end('{"ok":true}');
@@ -53,6 +56,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     console.log(`[reviewsignal] worker received ${signal}, draining`);
     server.close();
+    stopGauges();
     await boss.stop({ graceful: true, timeout: 60_000 });
     await pool.end();
     process.exit(0);

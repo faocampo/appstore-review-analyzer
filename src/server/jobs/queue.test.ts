@@ -168,8 +168,14 @@ describe("pg-boss worker", () => {
       await startWorkers(boss, jobDeps, { sync: "0 */2 * * *", evaluate: "15 * * * *", export: "30 3 * * *" });
       const schedules = await boss.getSchedules();
       expect(schedules.map((item) => item.name).sort()).toEqual(
-        [QUEUES.export, QUEUES.gauges, QUEUES.retention, QUEUES.scheduleEvaluations, QUEUES.scheduleSyncs].sort(),
+        [QUEUES.export, QUEUES.retention, QUEUES.scheduleEvaluations, QUEUES.scheduleSyncs].sort(),
       );
+      const { startGaugeLoop } = await import("@/server/jobs/gauges");
+      const stop = startGaugeLoop(db.pool, boss, 50);
+      await vi.waitFor(async () => {
+        expect(await registry.getSingleMetricAsString("reviewsignal_queue_depth")).toContain('queue="sync"');
+      });
+      stop();
       const id = await boss.send(QUEUES.gauges, {});
       await vi.waitFor(
         async () => {

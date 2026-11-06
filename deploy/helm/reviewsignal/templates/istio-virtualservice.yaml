@@ -1,0 +1,23 @@
+{{- if and .Values.istio.enabled .Values.istio.virtualService.enabled }}
+{{- $vs := .Values.istio.virtualService }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ include "reviewsignal.fullname" . }}-api
+  labels:
+    {{- include "reviewsignal.componentLabels" (list . "api") | nindent 4 }}
+spec:
+  hosts:
+    {{- toYaml (required "istio.virtualService.hosts is required" $vs.hosts) | nindent 4 }}
+  gateways:
+    {{- toYaml (required "istio.virtualService.gateways is required" $vs.gateways) | nindent 4 }}
+  http:
+    - match:
+        - uri:
+            prefix: {{ $vs.pathPrefix }}
+      route:
+        - destination:
+            host: {{ include "reviewsignal.fullname" . }}-api.{{ .Release.Namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.api.service.port }}
+{{- end }}

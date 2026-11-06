@@ -1,0 +1,13 @@
+{{- if .Values.api.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "reviewsignal.fullname" . }}-api
+  labels:
+    {{- include "reviewsignal.componentLabels" (list . "api") | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.api.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "reviewsignal.componentSelectorLabels" (list . "api") | nindent 6 }}
+{{- end }}

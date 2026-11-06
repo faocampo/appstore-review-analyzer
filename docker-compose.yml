@@ -1,0 +1,131 @@
+# Local stack for ReviewSignal: Postgres, migrations, API, worker and the
+# Next.js panels. See docs/service-contract.md.
+#
+#   docker compose up --build
+#
+#   API      http://localhost:8080   (/healthz, /readyz, /metrics, /v1/*)
+#   Worker   http://localhost:9464   (/healthz, /readyz, /metrics)
+#   Panels   http://localhost:3000
+#   Postgres localhost:5432          (reviewsignal / reviewsignal-local)
+#
+# Every secret below is a LOCAL-DEVELOPMENT-ONLY value committed on purpose.
+# They protect nothing and must never be reused in staging or production,
+# where AUTH_MODE=oidc and SECRET_STORE=aws.
+#
+# CSV uploads and exports need S3 (UPLOADS_BUCKET, EXPORT_BUCKET) and are not
+# configured here.
+
+name: reviewsignal
+
+x-server-image: &server-image
+  image: reviewsignal:local
+  build:
+    context: .
+    args:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+
+x-server-env: &server-env
+  # Non-production mode so local-only settings (dev auth, database secret
+  # store, mock classifier) are accepted.
+  NODE_ENV: development
+  DATABASE_URL: postgres://reviewsignal:reviewsignal-local@postgres:5432/reviewsignal
+  DATABASE_POOL_MAX: "5"
+  AUTH_MODE: dev
+  # DEV-ONLY: HS256 secret for local tokens (`npm run dev:token`).
+  DEV_JWT_SECRET: dev-only-iS3TQOdQONvzJetdk3y4J7191lg6i8mMRHl5Ff-wDho
+  CORS_ORIGINS: http://localhost:3000
+  SECRET_STORE: database
+  # DEV-ONLY: random 32-byte AES-256-GCM key (base64) generated for this
+  # file. Store credentials saved locally are encrypted with it.
+  SECRETS_ENCRYPTION_KEY: G9KvOLjfLS3ggTrFaSCHCY7DMHoL1kO2gzSuxfkukZw=
+  CLASSIFIER_PROVIDER: mock
+  MIN_N: "20"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      # DEV-ONLY superuser password; the services use the `reviewsignal` role.
+      POSTGRES_PASSWORD: postgres-local
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/local/postgres-init.sql:/docker-entrypoint-initdb.d/10-reviewsignal.sql:ro
+    healthcheck:
+      # TCP check: the temporary server used during initialization listens on
+      # the Unix socket only, so this passes only once init has finished.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "reviewsignal", "-d", "reviewsignal"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  migrate:
+    <<: *server-image
+    command: ["node", "dist/server/migrate.js"]
+    environment:
+      <<: *server-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *server-image
+    command: ["node", "dist/server/api.js"]
+    environment:
+      <<: *server-env
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    <<: *server-image
+    command: ["node", "dist/server/worker.js"]
+    environment:
+      <<: *server-env
+      METRICS_PORT: "9464"
+      # Run the schedules often locally so changes show up quickly.
+      SYNC_CRON: "*/15 * * * *"
+      EVALUATE_CRON: "*/15 * * * *"
+    ports:
+      - "9464:9464"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9464/readyz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  web:
+    <<: *server-image
+    command: ["node_modules/.bin/next", "start", "-p", "3000"]
+    environment:
+      NODE_ENV: production
+      # Also baked into the browser bundle at build time (build arg above).
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

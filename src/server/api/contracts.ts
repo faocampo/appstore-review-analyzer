@@ -69,10 +69,16 @@ export const createAppSchema = z
 
 export type CreateAppRequest = z.infer<typeof createAppSchema>;
 
-/** Credentials are write-only: they go to the secret store and are never returned. */
-export const googleCredentialsSchema = z.object({
-  serviceAccountJson: z.string().min(20).max(20_000),
-});
+/**
+ * Google Play access. Recommended: the publisher invites X3M's service
+ * account (GET /v1/onboarding returns its email) and sends
+ * `{ useX3mServiceAccount: true }`. Alternatively the publisher supplies its
+ * own service-account key. Credentials are write-only.
+ */
+export const googleCredentialsSchema = z.union([
+  z.object({ useX3mServiceAccount: z.literal(true) }),
+  z.object({ serviceAccountJson: z.string().min(20).max(20_000) }),
+]);
 
 export const appleCredentialsSchema = z.object({
   issuerId: z.string().trim().min(8).max(64),
@@ -107,10 +113,49 @@ export const uploadRequestSchema = z.object({
   byteSize: z.number().int().positive().max(50_000_000),
 });
 
+export interface AppsResponse {
+  items: AppDto[];
+}
+
+export interface OnboardingResponse {
+  /** Email of X3M's Google service account to invite in Play Console; null when not configured. */
+  googleServiceAccountEmail: string | null;
+  /** Play Console permissions to grant to that account. */
+  googlePermissions: string[];
+  /** App Store Connect API key role to use. */
+  appleKeyRole: string;
+}
+
+/** Response of PUT /v1/apps/{appId}/connections/{store}. */
+export interface ConnectionWriteResponse {
+  store: Store;
+  status: ConnectionStatus;
+}
+
+/** Response of POST /v1/apps/{appId}/connections/{store}/verify. */
+export interface VerifyResponse {
+  store: Store;
+  status: "active" | "error";
+  /** Safe, user-facing reason when verification failed. */
+  error: string | null;
+}
+
 export interface UploadResponse {
   uploadId: string;
   uploadUrl: string;
+  /** Headers the PUT to `uploadUrl` must send exactly (they are part of the signature). */
+  headers: Record<string, string>;
   expiresAt: string;
+}
+
+export type UploadStatus = "pending" | "imported" | "failed";
+
+/** Response of POST /v1/apps/{appId}/imports and GET /v1/apps/{appId}/uploads/{uploadId}. */
+export interface ImportResponse {
+  uploadId: string;
+  status: UploadStatus;
+  importedAt: string | null;
+  error: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,9 +166,7 @@ export const timeseriesQuerySchema = rangeQuerySchema.and(
   z.object({ granularity: z.enum(["day", "week"]).default("day") }),
 );
 
-export interface TimeseriesPoint {
-  /** Start of the bucket (UTC date). */
-  period: string;
+export interface TimeseriesTotals {
   n: number;
   /** Null when n is below the minimum sample size. */
   averageSentiment: number | null;
@@ -133,6 +176,11 @@ export interface TimeseriesPoint {
   negativeShare: number | null;
   /** Share of negative reviews whose primary or secondary reason is ads. */
   adsNegativeShare: number | null;
+}
+
+export interface TimeseriesPoint extends TimeseriesTotals {
+  /** Start of the bucket (UTC date). */
+  period: string;
   coverage: CoverageDayStatus;
 }
 
@@ -148,9 +196,14 @@ export interface TimeseriesResponse {
   granularity: "day" | "week";
   modelVersion: string | null;
   minN: number;
+  /** Pooled over the whole range (all buckets, including those below min N individually). */
+  totals: TimeseriesTotals;
   points: TimeseriesPoint[];
   releases: ReleaseMarker[];
+  /** Values present in the range, for filter pickers. */
+  dimensions: { territories: string[]; appVersions: string[] };
 }
+
 
 export interface ReasonCount {
   reason: ReasonKey;
@@ -170,6 +223,7 @@ export interface ReasonsResponse {
   from: string;
   to: string;
   group: "negative" | "neutral" | "positive";
+  minN: number;
   total: number;
   reasons: ReasonCount[];
   adSubreasons: AdSubreasonCount[];
@@ -296,6 +350,10 @@ export interface GuardrailArmValue {
 export interface GuardrailMetricResult {
   metric: GuardrailMetric;
   label: string;
+  /** Which direction is harmful; thresholds are magnitudes in that direction. */
+  harm: "increase" | "decrease";
+  /** Unit of values, delta and thresholds. `relative` means ratio − 1. */
+  unit: "share" | "points" | "stars" | "relative" | "per100k";
   status: GuardrailStatus;
   test: GuardrailArmValue;
   control: GuardrailArmValue;
@@ -310,6 +368,9 @@ export interface GuardrailMetricResult {
 export interface Confounder {
   kind: "release" | "coverage" | "model_change";
   detail: string;
+  /** UTC day the confounder starts, when it has one (e.g. a release). */
+  day?: string;
+  appVersion?: string;
 }
 
 export interface GuardrailResponse {
@@ -320,13 +381,22 @@ export interface GuardrailResponse {
   status: GuardrailStatus;
   attributionMode: "dimension" | "pre_post";
   attributionLabel: string;
+  dimension: "app_version" | "territory" | "store" | null;
+  arms: Array<{ key: string; role: "test" | "control"; values: string[]; dau: number | null }>;
   modelVersion: string | null;
   window: { start: string; end: string };
   baseline: { start: string; end: string } | null;
   metrics: GuardrailMetricResult[];
   confounders: Confounder[];
   /** Daily ad-complaint share among negative reviews, test vs. control. */
-  series: Array<{ day: string; test: number | null; control: number | null }>;
+  series: Array<{
+    day: string;
+    test: number | null;
+    control: number | null;
+    /** Negative reviews behind each day's share. */
+    testN: number;
+    controlN: number;
+  }>;
 }
 
 // ---------------------------------------------------------------------------

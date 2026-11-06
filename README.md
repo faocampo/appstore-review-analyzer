@@ -6,12 +6,18 @@ Store Connect APIs or private store exports. It classifies each review's
 sentiment and primary reason and reports deterministic period metrics with an
 explicit statement of data coverage.
 
-It is being productized as a Loomit plugin. The plugin will show how a
-publisher's reviews evolve, and will add reviews as a UX guardrail in Loomit
-monetization experiments. The full plan is in
-[`docs/productization-plan.md`](docs/productization-plan.md). This repository
-currently holds the standalone service and dashboard: milestones M0–M1, plus
-the server-side credential work from M2.
+It is a Loomit plugin: it shows publishers how their reviews evolve, and adds
+reviews as a UX guardrail in Loomit monetization experiments. The plan is in
+[`docs/productization-plan.md`](docs/productization-plan.md), and its
+implementation status in [`docs/status.md`](docs/status.md).
+
+The repository contains two things:
+
+- **The service** (`src/server`): multi-tenant ingestion, classification,
+  rollups, API v1 and guardrails, built to run on EKS. See
+  [Service architecture](#service-architecture).
+- **The standalone analyzer** (`/` and `POST /api/analyze`): the original
+  on-demand analysis page, kept as a demo and support tool.
 
 ## What it provides
 
@@ -100,7 +106,7 @@ credentials.
 
 The estimator used is reported in `metrics.sentimentEstimator`.
 
-## API
+## Standalone analyzer API
 
 `POST /api/analyze` takes the header `Authorization: Bearer <ANALYZE_API_TOKEN>`
 and this body:
@@ -156,30 +162,72 @@ The UI is built on the org's **loomit** Design System ("Calm Glass"):
 ```bash
 npm run lint
 npm run typecheck
-npm run test:coverage   # ≥ 90% branches, functions, lines, statements
-npm run build
+npm run test:coverage   # ≥ 90% branches, functions, lines, statements (needs Postgres)
+npm run build           # web
+npm run build:server    # api, worker, migrate → dist/server
 ```
 
 CI (`.github/workflows/ci.yml`) runs all of these, plus the token-freshness
 check, on every pull request.
 
-## Architecture (current service)
+## Service architecture
+
+The productized service (plan milestones M0–M5) runs as three processes from
+one image, all described in [`docs/service-contract.md`](docs/service-contract.md):
 
 ```text
-Browser dashboard (Loomit design system)
-      │  Bearer token
-      ▼
-POST /api/analyze ── access control + rate limit
-      │
-      ├─ connectors/google-play        ◄─ credentials/google (service account → OAuth)
-      ├─ connectors/app-store-connect  ◄─ credentials/apple (ES256 JWT)
-      └─ connectors/csv (UTF-8/UTF-16)
-      │
-      ▼  normalize → dedupe → period filter
-classifiers/run ── ClassifierProvider: openrouter | jev | mock
-      │  batched, retried, per-review failures counted
-      ▼
-aggregate → metrics + coverage + notices
+Loomit console / panels ──► API (Fastify, /v1, OIDC) ──► Postgres (RLS per tenant)
+Loomit backend (Kotlin) ──►        │                         ▲
+                                   └─ enqueue ─► pg-boss ─► Worker
+                                                             ├─ connectors: Google Play API + GCS reports, App Store Connect, CSV (S3)
+                                                             ├─ classifier: OpenRouter | Jev | mock (budgeted, cached)
+                                                             ├─ rollups → panel reads and Parquet export (S3)
+                                                             └─ guardrails G1–G4 → alerts → Loomit webhook (HMAC)
+```
+
+| Area | Code |
+| --- | --- |
+| Schema, RLS, migrations | `src/server/db/` |
+| Store connectors and credentials | `src/lib/connectors/`, `src/lib/credentials/`, `src/server/ingestion/` |
+| Classifiers | `src/lib/classifiers/` |
+| Rollups and panel queries | `src/server/repo/` |
+| Jobs and schedules | `src/server/jobs/` |
+| API v1 and contracts | `src/server/api/` (`/v1/openapi.json`) |
+| Guardrails, alerts, backtest | `src/server/guardrails/` |
+| Evaluation harness | `src/lib/eval/`, `scripts/eval*.ts`, `eval/` |
+
+### Local development
+
+The fastest path is Docker Compose (Postgres, migrations, API, worker, web):
+
+```bash
+docker compose up --build
+```
+
+Without Docker, run Postgres 16 locally and:
+
+```bash
+export DATABASE_URL=postgres://reviewsignal:reviewsignal@localhost:5432/reviewsignal
+export AUTH_MODE=dev DEV_JWT_SECRET=$(openssl rand -hex 32)
+export SECRET_STORE=database SECRETS_ENCRYPTION_KEY=$(openssl rand -base64 32)
+export CLASSIFIER_PROVIDER=mock
+npm run dev:migrate
+npm run dev:api      # :8080
+npm run dev:worker   # metrics on :9464
+npm run dev:token -- --publisher pub-demo   # bearer token for the panels and curl
+```
+
+Server tests create throwaway databases. They connect to
+`TEST_DATABASE_ADMIN_URL` (default `postgres://postgres@localhost:5433/postgres`)
+and run as a non-superuser role so row-level security is really enforced.
+
+### Classifier evaluation and guardrail backtest
+
+```bash
+npm run eval:smoke                                   # synthetic data, mock classifier
+npm run eval -- --dataset eval/datasets/<labeled>.jsonl --provider openrouter --model <id>
+npm run eval:agreement -- --dataset eval/datasets/<double-annotated>.jsonl
+DATABASE_URL=... npm run backtest -- --file experiments.json
 ```
 
 This project does not scrape public store pages or analyze competitor apps.

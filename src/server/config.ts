@@ -31,6 +31,7 @@ const schema = z
     EVALUATE_CRON: z.string().default("15 * * * *"),
     EXPORT_CRON: z.string().default("30 3 * * *"),
     MIN_N: z.coerce.number().int().min(1).max(10_000).default(20),
+    TENANT_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(600),
     ALERT_COOLDOWN_HOURS: z.coerce.number().int().min(1).max(720).default(24),
     TRUST_PROXY: boolish.default(true),
   })

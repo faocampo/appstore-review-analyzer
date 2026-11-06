@@ -1,0 +1,95 @@
+{{- $api := .Values.api }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "reviewsignal.fullname" . }}-api
+  labels:
+    {{- include "reviewsignal.componentLabels" (list . "api") | nindent 4 }}
+spec:
+  {{- if not $api.autoscaling.enabled }}
+  replicas: {{ $api.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "reviewsignal.componentSelectorLabels" (list . "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "reviewsignal.componentLabels" (list . "api") | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with $api.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- include "reviewsignal.podCommon" . | nindent 6 }}
+      terminationGracePeriodSeconds: {{ $api.terminationGracePeriodSeconds }}
+      {{- include "reviewsignal.topologySpread" (list . "api" $api) | nindent 6 }}
+      containers:
+        - name: api
+          image: {{ include "reviewsignal.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["node", "dist/server/api.js"]
+          ports:
+            - name: http
+              containerPort: {{ $api.port }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ $api.port | quote }}
+            {{- range $name, $value := $api.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "reviewsignal.configMapName" . }}
+            - secretRef:
+                name: {{ include "reviewsignal.secretName" . }}
+          startupProbe:
+            {{- toYaml $api.probes.startup | nindent 12 }}
+          readinessProbe:
+            {{- toYaml $api.probes.readiness | nindent 12 }}
+          livenessProbe:
+            {{- toYaml $api.probes.liveness | nindent 12 }}
+          {{- if $api.preStopSleepSeconds }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", {{ $api.preStopSleepSeconds | quote }}]
+          {{- end }}
+          resources:
+            {{- toYaml $api.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.tmpVolume.sizeLimit }}
+      {{- with $api.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $api.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $api.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

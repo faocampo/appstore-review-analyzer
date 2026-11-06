@@ -1,5 +1,7 @@
 # ReviewSignal → Loomit plugin: productization plan
 
+> **Status:** see [status.md](status.md) for what is built and verified, and what each milestone still needs from people and systems outside this repository.
+
 > ## Implementation scope of the first PR
 >
 > The full plan (below) spans about 15 weeks and depends on Loomit repositories, infrastructure and teams outside this repository: Postgres/EKS, the console embed, the Kotlin readout and historical experiments. This PR therefore delivers everything that can be built **and verified locally** inside the existing Next.js app, without breaking the current `/api/analyze` contract. It covers the M0 hardening, the M1 classifier layer, the M2 credential work and the §3.7 look & feel.

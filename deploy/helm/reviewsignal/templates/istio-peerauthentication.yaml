@@ -1,0 +1,15 @@
+{{- if .Values.istio.enabled }}
+# Mutual TLS is mandatory for every ReviewSignal pod (API and worker).
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ include "reviewsignal.fullname" . }}
+  labels:
+    {{- include "reviewsignal.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "reviewsignal.selectorLabels" . | nindent 6 }}
+  mtls:
+    mode: {{ .Values.istio.peerAuthentication.mode }}
+{{- end }}

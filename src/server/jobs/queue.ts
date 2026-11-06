@@ -203,6 +203,5 @@ export async function startWorkers(
   await boss.schedule(QUEUES.scheduleSyncs, schedules.sync);
   await boss.schedule(QUEUES.scheduleEvaluations, schedules.evaluate);
   await boss.schedule(QUEUES.export, schedules.export);
-  await boss.schedule(QUEUES.gauges, "*/5 * * * *");
   await boss.schedule(QUEUES.retention, "45 4 * * *");
 }

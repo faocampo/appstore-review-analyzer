@@ -22,6 +22,7 @@ async function main(): Promise<void> {
     claims: { tenant: config.AUTH_TENANT_CLAIM, roles: config.AUTH_ROLES_CLAIM },
     corsOrigins: config.CORS_ORIGINS.split(",").map((origin) => origin.trim()).filter(Boolean),
     minN: config.MIN_N,
+    rateLimitPerMinute: config.TENANT_RATE_LIMIT_PER_MINUTE,
     logger: true,
   });
 

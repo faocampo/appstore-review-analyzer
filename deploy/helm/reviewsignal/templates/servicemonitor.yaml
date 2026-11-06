@@ -1,0 +1,43 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+{{- $sm := .Values.metrics.serviceMonitor }}
+{{- range $component := list "api" "worker" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "reviewsignal.fullname" $ }}-{{ $component }}
+  labels:
+    {{- include "reviewsignal.componentLabels" (list $ $component) | nindent 4 }}
+    {{- with $sm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "reviewsignal.componentSelectorLabels" (list $ $component) | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ $.Release.Namespace }}
+  endpoints:
+    - port: {{ ternary "http-api" "http-metrics" (eq $component "api") }}
+      path: /metrics
+      interval: {{ $sm.interval }}
+      scrapeTimeout: {{ $sm.scrapeTimeout }}
+      {{- if $sm.istioMtls }}
+      # Istio STRICT mTLS: Prometheus presents the workload certificate its
+      # sidecar writes to {{ $sm.istioCertDir }}. Prometheus cannot verify
+      # Istio's SPIFFE-based server names, hence insecureSkipVerify.
+      scheme: https
+      tlsConfig:
+        caFile: {{ $sm.istioCertDir }}/root-cert.pem
+        certFile: {{ $sm.istioCertDir }}/cert-chain.pem
+        keyFile: {{ $sm.istioCertDir }}/key.pem
+        insecureSkipVerify: true
+      {{- end }}
+      relabelings:
+        # Stable job names used by the alert rules (deploy/prometheus/alerts.yaml).
+        - action: replace
+          targetLabel: job
+          replacement: reviewsignal-{{ $component }}
+{{- end }}
+{{- end }}

@@ -84,3 +84,33 @@ jobs:
           curl -sf localhost:8080/readyz
           curl -sf localhost:9464/metrics | grep -q reviewsignal_
           kill $API_PID $WORKER_PID
+
+  deploy-artifacts:
+    name: Chart, alert rules and image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Alert rules in the chart match deploy/prometheus
+        run: bash deploy/scripts/sync-alerts.sh --check
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint and render the chart (staging and production)
+        # The overlays leave OPENROUTER_MODEL empty until the M1 model
+        # decision; CI pins a placeholder only to render.
+        run: |
+          for env in staging production; do
+            helm lint deploy/helm/reviewsignal -f deploy/helm/reviewsignal/values-$env.yaml --set config.OPENROUTER_MODEL=ci/placeholder-model
+            helm template reviewsignal deploy/helm/reviewsignal -f deploy/helm/reviewsignal/values-$env.yaml --set config.OPENROUTER_MODEL=ci/placeholder-model > rendered-$env.yaml
+          done
+
+      - name: Check alert rules with promtool
+        run: |
+          docker run --rm -v "$PWD/deploy/prometheus:/rules" --entrypoint promtool prom/prometheus:v3.5.0 check rules /rules/alerts.yaml
+
+      - name: Build the image
+        run: docker build --build-arg NEXT_PUBLIC_API_URL=https://reviewsignal.example.invalid -t reviewsignal:ci .

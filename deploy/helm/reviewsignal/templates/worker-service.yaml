@@ -1,0 +1,16 @@
+# ClusterIP Service used only for metrics scraping.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "reviewsignal.fullname" . }}-worker-metrics
+  labels:
+    {{- include "reviewsignal.componentLabels" (list . "worker") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "reviewsignal.componentSelectorLabels" (list . "worker") | nindent 4 }}
+  ports:
+    - name: http-metrics
+      port: {{ .Values.worker.metricsPort }}
+      targetPort: metrics
+      protocol: TCP

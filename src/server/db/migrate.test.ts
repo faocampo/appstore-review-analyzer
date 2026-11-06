@@ -79,3 +79,18 @@ describe("row-level security", () => {
     expect(after.rows[0].setting ?? "").toBe("");
   });
 });
+
+describe("migration backfills", () => {
+  it("run with row-level security bypassed", async () => {
+    await withScope(db.pool, SYSTEM, (client) =>
+      client.query("insert into tenant (loomit_publisher_id, name) values ('backfill', 'backfill')"),
+    );
+    await migrate(db.pool, [
+      { name: "9998_backfill_probe", sql: "create table backfill_probe as select count(*)::int as tenants from app" },
+    ]);
+    const probe = await withScope(db.pool, SYSTEM, (client) => client.query<{ tenants: number }>("select tenants from backfill_probe"));
+    const apps = await withScope(db.pool, SYSTEM, (client) => client.query<{ count: number }>("select count(*)::int as count from app"));
+    expect(probe.rows[0].tenants).toBe(apps.rows[0].count);
+    expect(apps.rows[0].count).toBeGreaterThan(0);
+  });
+});

@@ -166,7 +166,12 @@ describe("experiment evaluation", () => {
         expect.objectContaining({ kind: "coverage" }),
       ]),
     );
-    expect(view?.series[0]).toEqual({ day: "2026-10-20", test: 0.5833, control: 0.2 });
+    expect(view?.series[0]).toEqual({ day: "2026-10-20", test: 0.5833, control: 0.2, testN: 12, controlN: 10 });
+    expect(view?.arms).toEqual([
+      { key: "treatment", role: "test", values: ["BR"], dau: 40_000 },
+      { key: "control", role: "control", values: ["MX"], dau: 40_000 },
+    ]);
+    expect(view?.metrics[0]).toMatchObject({ harm: "increase", unit: "share" });
 
     // Delivery: signed POST, marked delivered, then skipped.
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));

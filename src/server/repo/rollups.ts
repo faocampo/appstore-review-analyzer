@@ -31,6 +31,8 @@ interface Bucket {
   adsNegative: number;
   reasons: Record<string, number>;
   negativeReasons: Record<string, number>;
+  neutralReasons: Record<string, number>;
+  positiveReasons: Record<string, number>;
   adSubreasons: Record<string, number>;
 }
 
@@ -48,7 +50,8 @@ export function aggregateBuckets(rows: ClassifiedRow[]): Bucket[] {
       bucket = {
         tenantId: row.tenant_id, store: row.store, day: row.day, appVersion: row.app_version,
         territory: row.territory, n: 0, sumEv: 0, sumEv2: 0, sumRating: 0, sumRating2: 0,
-        negative: 0, neutral: 0, positive: 0, adsNegative: 0, reasons: {}, negativeReasons: {}, adSubreasons: {},
+        negative: 0, neutral: 0, positive: 0, adsNegative: 0, reasons: {}, negativeReasons: {},
+        neutralReasons: {}, positiveReasons: {}, adSubreasons: {},
       };
       buckets.set(key, bucket);
     }
@@ -68,8 +71,10 @@ export function aggregateBuckets(rows: ClassifiedRow[]): Bucket[] {
       }
     } else if (row.sentiment_score === 2) {
       bucket.neutral += 1;
+      increment(bucket.neutralReasons, row.primary_reason);
     } else {
       bucket.positive += 1;
+      increment(bucket.positiveReasons, row.primary_reason);
     }
   }
   return [...buckets.values()];
@@ -90,7 +95,10 @@ export async function rebuildRollups(
        c.sentiment_ev, c.sentiment_score, c.primary_reason, c.secondary_reason, c.ad_subreason
      from review r
      join classification c on c.review_id = r.id and c.text_hash = r.text_hash and c.model_version = $2
-     where r.app_id = $1 and (r.created_at at time zone 'UTC')::date = any($3::date[])`,
+     where r.app_id = $1
+       and r.created_at >= ((select min(d) from unnest($3::date[]) d)::timestamp at time zone 'UTC')
+       and r.created_at < (((select max(d) from unnest($3::date[]) d) + 1)::timestamp at time zone 'UTC')
+       and (r.created_at at time zone 'UTC')::date = any($3::date[])`,
     [input.appId, input.modelVersion, input.days],
   );
   await client.query(
@@ -102,27 +110,26 @@ export async function rebuildRollups(
   await client.query(
     `insert into review_daily_rollup (tenant_id, app_id, store, day, app_version, territory, model_version,
        n, sum_ev, sum_ev2, sum_rating, sum_rating2, negative, neutral, positive, ads_negative,
-       reason_counts, negative_reason_counts, ad_subreason_counts)
+       reason_counts, negative_reason_counts, neutral_reason_counts, positive_reason_counts, ad_subreason_counts)
      select b."tenantId", $1, b.store, b.day::date, b."appVersion", b.territory, $2,
        b.n, b."sumEv", b."sumEv2", b."sumRating", b."sumRating2", b.negative, b.neutral, b.positive,
-       b."adsNegative", b.reasons, b."negativeReasons", b."adSubreasons"
+       b."adsNegative", b.reasons, b."negativeReasons", b."neutralReasons", b."positiveReasons", b."adSubreasons"
      from jsonb_to_recordset($3::jsonb) as b("tenantId" uuid, store text, day text, "appVersion" text,
        territory text, n int, "sumEv" float8, "sumEv2" float8, "sumRating" float8, "sumRating2" float8,
        negative int, neutral int, positive int, "adsNegative" int, reasons jsonb, "negativeReasons" jsonb,
-       "adSubreasons" jsonb)`,
+       "neutralReasons" jsonb, "positiveReasons" jsonb, "adSubreasons" jsonb)`,
     [input.appId, input.modelVersion, JSON.stringify(buckets)],
   );
   return buckets.length;
 }
 
-/** The model version with the most recent classification for an app. */
+/** The model version of the app's most recent classification (kept by a trigger). */
 export async function currentModelVersion(client: Client, appId: string): Promise<string | null> {
-  const { rows } = await client.query<{ model_version: string }>(
-    `select c.model_version from classification c join review r on r.id = c.review_id
-     where r.app_id = $1 order by c.created_at desc limit 1`,
+  const { rows } = await client.query<{ current_model_version: string | null }>(
+    "select current_model_version from app where id = $1",
     [appId],
   );
-  return rows[0]?.model_version ?? null;
+  return rows[0]?.current_model_version ?? null;
 }
 
 export async function addSpend(

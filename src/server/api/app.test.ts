@@ -204,7 +204,13 @@ describe("API v1", () => {
     const upload = await call("POST", `/v1/apps/${appId}/uploads`, a, { fileName: "reviews.csv", platform: "android", byteSize: 1000 });
     expect(upload.status).toBe(201);
     expect(upload.body.uploadUrl).toContain("uploads.example.test/uploads/");
-    expect((await call("POST", `/v1/apps/${appId}/imports`, a, { uploadId: upload.body.uploadId })).status).toBe(202);
+    expect(upload.body.headers).toEqual({ "Content-Type": "text/csv" });
+    const queued = await call("POST", `/v1/apps/${appId}/imports`, a, { uploadId: upload.body.uploadId });
+    expect(queued).toMatchObject({ status: 202, body: { uploadId: upload.body.uploadId, status: "pending", error: null } });
+    const polled = await call("GET", `/v1/apps/${appId}/uploads/${upload.body.uploadId}`, a);
+    expect(polled.body).toEqual({ uploadId: upload.body.uploadId, status: "pending", importedAt: null, error: null });
+    expect((await call("GET", `/v1/apps/${appId}/uploads/00000000-0000-0000-0000-000000000000`, a)).status).toBe(404);
+    expect((await call("GET", `/v1/apps/${appId}/uploads/not-a-uuid`, a)).status).toBe(400);
     expect(sent.at(-1)).toEqual({ name: QUEUES.importUpload, data: { uploadId: upload.body.uploadId } });
     expect((await call("POST", `/v1/apps/${appId}/imports`, a, { uploadId: "00000000-0000-0000-0000-000000000000" })).status).toBe(404);
     expect((await call("POST", `/v1/apps/${appId}/sync`, a)).body).toEqual({ queued: 1 });
@@ -252,6 +258,30 @@ describe("API v1", () => {
     expect((await call("DELETE", "/v1/tenants/me", await publisherB())).status).toBe(204);
     const remaining = await withScope(db.pool, SYSTEM, (client) => client.query("select loomit_publisher_id from tenant"));
     expect(remaining.rows.map((row) => row.loomit_publisher_id)).toEqual(["pub-a"]);
+  });
+
+  it("onboards Google with X3M's service account", async () => {
+    const a = await publisherA();
+    vi.stubEnv("X3M_GOOGLE_SERVICE_ACCOUNT_JSON", "");
+    expect((await call("GET", "/v1/onboarding", a)).body).toMatchObject({ googleServiceAccountEmail: null, appleKeyRole: "Customer Support" });
+
+    const created = await call("POST", "/v1/apps", a, { loomitAppId: "app-x3m", name: "X3M mode", androidPackage: "com.example.x3m" });
+    const appId = created.body.id as string;
+    expect((await call("PUT", `/v1/apps/${appId}/connections/google_play`, a, { useX3mServiceAccount: true })).status).toBe(202);
+    const notConfigured = await call("POST", `/v1/apps/${appId}/connections/google_play/verify`, a);
+    expect(notConfigured.body).toEqual({ store: "google_play", status: "error", error: "X3M's Google service account is not configured on the server." });
+
+    vi.stubEnv(
+      "X3M_GOOGLE_SERVICE_ACCOUNT_JSON",
+      Buffer.from(JSON.stringify({ type: "service_account", client_email: "reviewsignal@x3m.iam.gserviceaccount.com" })).toString("base64"),
+    );
+    expect((await call("GET", "/v1/onboarding", a)).body.googleServiceAccountEmail).toBe("reviewsignal@x3m.iam.gserviceaccount.com");
+    const verified = await call("POST", `/v1/apps/${appId}/connections/google_play/verify`, a);
+    expect(verified.body).toEqual({ store: "google_play", status: "active", error: null });
+
+    vi.stubEnv("X3M_GOOGLE_SERVICE_ACCOUNT_JSON", "{not json");
+    expect((await call("GET", "/v1/onboarding", a)).body.googleServiceAccountEmail).toBeNull();
+    vi.unstubAllEnvs();
   });
 
   it("verifies OIDC tokens against a JWKS", async () => {

@@ -1,0 +1,20 @@
+{{- if and .Values.istio.enabled .Values.istio.serviceEntries.enabled }}
+# Outbound HTTPS destinations (store APIs, classifier providers) for meshes
+# with outboundTrafficPolicy REGISTRY_ONLY.
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: {{ include "reviewsignal.fullname" . }}-egress
+  labels:
+    {{- include "reviewsignal.labels" . | nindent 4 }}
+spec:
+  hosts:
+    {{- toYaml .Values.istio.serviceEntries.hosts | nindent 4 }}
+  exportTo: ["."]
+  location: MESH_EXTERNAL
+  resolution: DNS
+  ports:
+    - number: 443
+      name: tls
+      protocol: TLS
+{{- end }}

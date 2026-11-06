@@ -1,0 +1,321 @@
+# Default values for the ReviewSignal chart.
+#
+# Environment overlays: values-staging.yaml and values-production.yaml.
+# The runtime contract (processes, ports, variables) is docs/service-contract.md.
+#
+# Values marked PLACEHOLDER are environment-specific identifiers (AWS account,
+# hostnames, Istio principals) that the platform team must confirm. Templates
+# fail with a clear message when a required value is left empty.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  # PLACEHOLDER: ECR repository, <account-id>.dkr.ecr.<region>.amazonaws.com/reviewsignal.
+  # Required; set in the environment overlay.
+  repository: ""
+  # Immutable tag (git SHA) written by CI. Defaults to Chart.appVersion when empty.
+  tag: ""
+  # Optional digest (sha256:...). When set, it pins the image exactly.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+commonLabels: {}
+
+serviceAccount:
+  create: true
+  # Defaults to the chart fullname.
+  name: ""
+  # IAM role for IRSA. It needs Secrets Manager access under SECRETS_PREFIX,
+  # the KMS key that encrypts those secrets, and the upload/export buckets.
+  # Policy: docs/operations/security-review.md#23-secrets-handling
+  # PLACEHOLDER: arn:aws:iam::<account-id>:role/<role-name>
+  irsaRoleArn: ""
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# Non-secret configuration, rendered into a ConfigMap and loaded by the API
+# and the worker. Empty values are omitted so the service applies its own
+# defaults. Variable reference: docs/service-contract.md#environment.
+# ---------------------------------------------------------------------------
+config:
+  NODE_ENV: production
+  DATABASE_POOL_MAX: "10"
+  AUTH_MODE: oidc
+  OIDC_ISSUER: ""
+  OIDC_AUDIENCE: ""
+  OIDC_JWKS_URL: ""
+  AUTH_TENANT_CLAIM: loomit_publisher_id
+  AUTH_ROLES_CLAIM: roles
+  CORS_ORIGINS: ""
+  SECRET_STORE: aws
+  AWS_REGION: ""
+  # Per-publisher store credentials live under this Secrets Manager prefix.
+  # Use one prefix per environment and keep it disjoint from
+  # externalSecrets.remoteKey.
+  SECRETS_PREFIX: ""
+  UPLOADS_BUCKET: ""
+  EXPORT_BUCKET: ""
+  LOOMIT_NOTIFY_URL: ""
+  SYNC_CRON: ""
+  EVALUATE_CRON: ""
+  EXPORT_CRON: ""
+  ALERT_COOLDOWN_HOURS: ""
+  MIN_N: ""
+  # Per-publisher API requests per minute, per API pod.
+  TENANT_RATE_LIMIT_PER_MINUTE: ""
+  # The API runs behind the Istio sidecar and gateway (default true).
+  TRUST_PROXY: ""
+  CLASSIFIER_PROVIDER: openrouter
+  # Pinned model id; required when CLASSIFIER_PROVIDER=openrouter.
+  OPENROUTER_MODEL: ""
+  OPENROUTER_ZDR: "true"
+  OPENROUTER_BATCH_SIZE: ""
+  CLASSIFIER_FALLBACK_PROVIDER: ""
+  CLASSIFIER_CONCURRENCY: ""
+  CLASSIFIER_MAX_RETRIES: ""
+  CLASSIFIER_TIMEOUT_MS: ""
+  TYPESAFE_MODEL: ""
+
+# Additional non-secret variables (merged into the ConfigMap).
+extraConfig: {}
+
+# ---------------------------------------------------------------------------
+# Secrets. Either External Secrets Operator syncs them from AWS Secrets
+# Manager (default), or secrets.existingSecret names a Secret created out of
+# band. Keys expected in the Secret: externalSecrets.keys.
+# ---------------------------------------------------------------------------
+secrets:
+  # Name of a pre-existing Secret. Used only when externalSecrets.enabled=false.
+  existingSecret: ""
+
+externalSecrets:
+  enabled: true
+  apiVersion: external-secrets.io/v1
+  secretStoreRef:
+    kind: ClusterSecretStore
+    # PLACEHOLDER: name of the cluster's Secrets Manager store.
+    name: aws-secrets-manager
+  refreshInterval: 1h
+  # Secrets Manager secret (a JSON object) holding the runtime keys below.
+  # PLACEHOLDER: e.g. reviewsignal-runtime/<environment>. Required.
+  remoteKey: ""
+  # JSON properties copied into the Kubernetes Secret, one env var each.
+  # Every listed property must exist in the remote secret, or the sync fails.
+  keys:
+    - DATABASE_URL
+    - OPENROUTER_API_KEY
+    - LOOMIT_NOTIFY_SECRET
+    # X3M's own Google service account (JSON or base64). Publishers invite its
+    # email in Play Console; GET /v1/onboarding returns it.
+    - X3M_GOOGLE_SERVICE_ACCOUNT_JSON
+
+# ---------------------------------------------------------------------------
+# Shared pod settings
+# ---------------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# emptyDir mounted at /tmp (the root filesystem is read-only).
+tmpVolume:
+  sizeLimit: 128Mi
+
+# Applied to API and worker pods. Istio waits for the sidecar before starting
+# the app so the first database connection does not race the proxy.
+podAnnotations:
+  proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+podLabels: {}
+
+# ---------------------------------------------------------------------------
+# API (node dist/server/api.js)
+# ---------------------------------------------------------------------------
+api:
+  replicas: 2
+  port: 8080
+  service:
+    type: ClusterIP
+    port: 8080
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  # Extra env vars for the API only (name: value).
+  env: {}
+  terminationGracePeriodSeconds: 30
+  # Lets endpoints and the mesh stop routing before the process exits.
+  preStopSleepSeconds: 5
+  probes:
+    startup:
+      httpGet: { path: /healthz, port: http }
+      periodSeconds: 2
+      failureThreshold: 30
+    readiness:
+      httpGet: { path: /readyz, port: http }
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+    liveness:
+      httpGet: { path: /healthz, port: http }
+      periodSeconds: 20
+      timeoutSeconds: 3
+      failureThreshold: 3
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpread:
+    enabled: true
+    topologyKey: topology.kubernetes.io/zone
+    maxSkew: 1
+
+# ---------------------------------------------------------------------------
+# Worker (node dist/server/worker.js); pg-boss jobs and schedules
+# ---------------------------------------------------------------------------
+worker:
+  replicas: 1
+  metricsPort: 9464
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 384Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+  env: {}
+  # Time for in-flight jobs (classification batches, syncs) to finish.
+  terminationGracePeriodSeconds: 120
+  probes:
+    startup:
+      httpGet: { path: /healthz, port: metrics }
+      periodSeconds: 2
+      failureThreshold: 30
+    readiness:
+      httpGet: { path: /readyz, port: metrics }
+      periodSeconds: 15
+      timeoutSeconds: 3
+      failureThreshold: 3
+    liveness:
+      httpGet: { path: /healthz, port: metrics }
+      periodSeconds: 20
+      timeoutSeconds: 3
+      failureThreshold: 3
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpread:
+    enabled: true
+    topologyKey: topology.kubernetes.io/zone
+    maxSkew: 1
+
+# ---------------------------------------------------------------------------
+# Migrations (node dist/server/migrate.js), run before API and worker roll out:
+# an Argo CD PreSync hook, or a Helm pre-install/pre-upgrade hook.
+# ---------------------------------------------------------------------------
+migrations:
+  enabled: true
+  # Property of externalSecrets.remoteKey used as DATABASE_URL for the job.
+  # Point it at a separate schema-owner connection string if runtime and
+  # migrations use different database roles.
+  databaseUrlProperty: DATABASE_URL
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # No Istio sidecar: a sidecar would keep the Job from completing. The job
+  # only talks to RDS, which is outside the mesh.
+  podAnnotations:
+    sidecar.istio.io/inject: "false"
+  nodeSelector: {}
+  tolerations: []
+
+# ---------------------------------------------------------------------------
+# Prometheus Operator
+# ---------------------------------------------------------------------------
+metrics:
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    # Labels the Prometheus instance selects ServiceMonitors by.
+    labels:
+      release: kube-prometheus-stack
+    # Scrape through Istio mTLS with the certificates the Istio sidecar writes
+    # for Prometheus (Istio's documented Prometheus Operator setup). Set false
+    # when the workloads are outside the mesh.
+    istioMtls: true
+    istioCertDir: /etc/prom-certs
+  prometheusRule:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+
+# ---------------------------------------------------------------------------
+# Istio
+# ---------------------------------------------------------------------------
+istio:
+  enabled: true
+  peerAuthentication:
+    mode: STRICT
+  authorizationPolicy:
+    enabled: true
+    # SPIFFE principals allowed to call the API (/v1/*).
+    # PLACEHOLDER: confirm the namespaces and service accounts with the Loomit
+    # platform team.
+    apiPrincipals:
+      - cluster.local/ns/istio-ingress/sa/loomit-console-gateway
+      - cluster.local/ns/loomit/sa/loomit-backend
+    # Principals allowed to scrape /metrics on the API and the worker.
+    prometheusPrincipals:
+      - cluster.local/ns/monitoring/sa/kube-prometheus-stack-prometheus
+  # Optional route from a shared Istio gateway to the API. Disabled when the
+  # route is owned by the Loomit gateway configuration.
+  virtualService:
+    enabled: false
+    hosts: []
+    gateways: []
+    pathPrefix: /v1/
+  # ServiceEntries for outbound hosts, needed when the mesh uses
+  # outboundTrafficPolicy REGISTRY_ONLY. AWS endpoints (RDS, S3, Secrets
+  # Manager) are usually reachable through VPC endpoints; add them here if not.
+  serviceEntries:
+    enabled: false
+    hosts:
+      - openrouter.ai
+      - api.typesafe.ai
+      - androidpublisher.googleapis.com
+      - oauth2.googleapis.com
+      - storage.googleapis.com
+      - api.appstoreconnect.apple.com

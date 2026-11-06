@@ -42,6 +42,8 @@ All server processes are built with `npm run build:server` (tsup) into
 | `SYNC_CRON` | worker | no | Schedule for incremental syncs (default every 2 h). |
 | `EVALUATE_CRON` | worker | no | Schedule for guardrail evaluation (default hourly). |
 | `MIN_N` | api, worker | no | Minimum reviews per bucket or arm before a value is shown (default 20). |
+| `TENANT_RATE_LIMIT_PER_MINUTE` | api | no | Requests per publisher per minute, per pod (default 600). |
+| `X3M_GOOGLE_SERVICE_ACCOUNT_JSON` | api, worker | for Google Play | X3M's Google service account (JSON or base64). Publishers invite its email in Play Console and connect with `{ "useX3mServiceAccount": true }`. Secret. |
 | Classifier variables | worker | yes | `CLASSIFIER_PROVIDER`, `OPENROUTER_*`, `TYPESAFE_*`, `CLASSIFIER_FALLBACK_PROVIDER`, `CLASSIFIER_*` (see README). |
 | `NEXT_PUBLIC_API_URL` | web | yes | Base URL of the API for the panels. |
 
