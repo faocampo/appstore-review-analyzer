@@ -5,7 +5,7 @@
  */
 import { z } from "zod";
 
-import { isValidServiceAccountKey } from "@/lib/credentials/google";
+import { isValidServiceAccountKey } from "@/lib/credentials/service-account";
 
 import type {
   AdSubreasonKey,
