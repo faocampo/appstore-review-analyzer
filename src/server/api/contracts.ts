@@ -352,8 +352,10 @@ export interface GuardrailMetricResult {
   label: string;
   /** Which direction is harmful; thresholds are magnitudes in that direction. */
   harm: "increase" | "decrease";
-  /** Unit of values, delta and thresholds. `relative` means ratio − 1. */
+  /** Unit of delta and thresholds. `relative` means ratio − 1. */
   unit: "share" | "points" | "stars" | "relative" | "per100k";
+  /** Unit of the test and control values (differs from `unit` for G3: rates per 100k DAU, compared as a relative change). */
+  valueUnit: "share" | "points" | "stars" | "relative" | "per100k";
   status: GuardrailStatus;
   test: GuardrailArmValue;
   control: GuardrailArmValue;

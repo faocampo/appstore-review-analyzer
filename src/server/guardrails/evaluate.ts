@@ -29,12 +29,17 @@ export interface RuleThresholds {
  */
 export const DEFAULT_RULES: Record<
   GuardrailMetric,
-  RuleThresholds & { label: string; harm: GuardrailMetricResult["harm"]; unit: GuardrailMetricResult["unit"] }
+  RuleThresholds & {
+    label: string;
+    harm: GuardrailMetricResult["harm"];
+    unit: GuardrailMetricResult["unit"];
+    valueUnit: GuardrailMetricResult["valueUnit"];
+  }
 > = {
-  G1: { label: "Ad complaints among negative reviews", harm: "increase", unit: "share", warn: 0.05, breach: 0.1, minN: 20 },
-  G2: { label: "Average sentiment (0–4)", harm: "decrease", unit: "points", warn: 0.15, breach: 0.3, minN: 20 },
-  G3: { label: "Ad-complaint reviews per 100k DAU", harm: "increase", unit: "relative", warn: 0.25, breach: 0.5, minN: 10 },
-  G4: { label: "Written-review rating (1–5)", harm: "decrease", unit: "stars", warn: 0.15, breach: 0.3, minN: 20 },
+  G1: { label: "Ad complaints among negative reviews", harm: "increase", unit: "share", valueUnit: "share", warn: 0.05, breach: 0.1, minN: 20 },
+  G2: { label: "Average sentiment (0–4)", harm: "decrease", unit: "points", valueUnit: "points", warn: 0.15, breach: 0.3, minN: 20 },
+  G3: { label: "Ad-complaint reviews per 100k DAU", harm: "increase", unit: "relative", valueUnit: "per100k", warn: 0.25, breach: 0.5, minN: 10 },
+  G4: { label: "Written-review rating (1–5)", harm: "decrease", unit: "stars", valueUnit: "stars", warn: 0.15, breach: 0.3, minN: 20 },
 };
 
 const P_BREACH = 0.05;
@@ -145,6 +150,7 @@ export function evaluateMetrics(
     label: DEFAULT_RULES[metric].label,
     harm: DEFAULT_RULES[metric].harm,
     unit: DEFAULT_RULES[metric].unit,
+    valueUnit: DEFAULT_RULES[metric].valueUnit,
     status: "insufficient",
     ...values,
     delta: null,
@@ -162,6 +168,7 @@ export function evaluateMetrics(
     label: DEFAULT_RULES[metric].label,
     harm: DEFAULT_RULES[metric].harm,
     unit: DEFAULT_RULES[metric].unit,
+    valueUnit: DEFAULT_RULES[metric].valueUnit,
     status: statusFor(result, DEFAULT_RULES[metric].harm, rules[metric]),
     ...values,
     delta: round(result.delta),

@@ -15,7 +15,7 @@ import type { Confounder, GuardrailMetricResult, GuardrailResponse, GuardrailSta
 // Copy and formatting
 // ---------------------------------------------------------------------------
 
-/** Values, deltas and thresholds share the metric's unit. */
+/** Deltas and thresholds use the metric's `unit`; arm values use `valueUnit`. */
 const UNIT_FORMAT: Record<GuardrailMetricResult["unit"], { value: (v: number) => string; delta: (v: number) => string }> = {
   share: { value: (v) => formatShare(v, 1), delta: (v) => formatPoints(v) },
   points: { value: (v) => formatFixed(v), delta: (v) => formatSigned(v) },
@@ -116,7 +116,8 @@ function attribution(readout: GuardrailResponse): { label: string; explanation: 
 
 function MetricCard({ metric, labels }: { metric: GuardrailMetricResult; labels: { test: string; control: string } }): ReactElement {
   const format = UNIT_FORMAT[metric.unit];
-  const value = (v: number | null) => (v === null ? <span className="muted">Insufficient</span> : format.value(v));
+  const valueFormat = UNIT_FORMAT[metric.valueUnit ?? metric.unit];
+  const value = (v: number | null) => (v === null ? <span className="muted">Insufficient</span> : valueFormat.value(v));
   return (
     <article className="card metric">
       <div className="metric__head">

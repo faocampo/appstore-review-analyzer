@@ -836,12 +836,12 @@ function guardrailSeries(
 
 const METRIC_DEFINITIONS: Record<
   GuardrailMetricResult["metric"],
-  Pick<GuardrailMetricResult, "label" | "harm" | "unit" | "thresholds">
+  Pick<GuardrailMetricResult, "label" | "harm" | "unit" | "valueUnit" | "thresholds">
 > = {
-  G1: { label: "Ad-complaint share of negative reviews", harm: "increase", unit: "share", thresholds: { warn: 0.05, breach: 0.1, minN: 20 } },
-  G2: { label: "Sentiment EV (0–4)", harm: "decrease", unit: "points", thresholds: { warn: 0.15, breach: 0.3, minN: 20 } },
-  G3: { label: "Ad-related negative reviews per 100k DAU", harm: "increase", unit: "per100k", thresholds: { warn: 1.5, breach: 3, minN: 20 } },
-  G4: { label: "Written-review rating (1–5)", harm: "decrease", unit: "stars", thresholds: { warn: 0.2, breach: 0.4, minN: 20 } },
+  G1: { label: "Ad-complaint share of negative reviews", harm: "increase", unit: "share", valueUnit: "share", thresholds: { warn: 0.05, breach: 0.1, minN: 20 } },
+  G2: { label: "Sentiment EV (0–4)", harm: "decrease", unit: "points", valueUnit: "points", thresholds: { warn: 0.15, breach: 0.3, minN: 20 } },
+  G3: { label: "Ad-related negative reviews per 100k DAU", harm: "increase", unit: "relative", valueUnit: "per100k", thresholds: { warn: 0.25, breach: 0.5, minN: 10 } },
+  G4: { label: "Written-review rating (1–5)", harm: "decrease", unit: "stars", valueUnit: "stars", thresholds: { warn: 0.2, breach: 0.4, minN: 20 } },
 };
 
 function metric(
@@ -919,7 +919,7 @@ export function fixtureGuardrails(experimentId: string): GuardrailResponse {
       metrics: [
         metric("G1", "ok", [388, 0.205], [802, 0.219], -0.014, 0.58),
         metric("G2", "ok", [1204, 2.66], [2480, 2.63], 0.03, 0.44),
-        metric("G3", "ok", [80, 4.1], [176, 4.4], -0.3, 0.61),
+        metric("G3", "ok", [80, 4.1], [176, 4.4], -0.068, 0.61),
         metric("G4", "ok", [1204, 3.58], [2480, 3.55], 0.03, 0.52),
       ],
       confounders: [],
@@ -946,7 +946,7 @@ export function fixtureGuardrails(experimentId: string): GuardrailResponse {
     metrics: [
       metric("G1", "warn", [412, 0.318], [655, 0.224], 0.094, 0.0021),
       metric("G2", "ok", [1290, 2.31], [2050, 2.38], -0.07, 0.21),
-      metric("G3", "ok", [131, 3.1], [147, 2.6], 0.5, 0.18),
+      metric("G3", "ok", [131, 3.1], [147, 2.6], 0.192, 0.18),
       metric("G4", "ok", [1290, 3.21], [2050, 3.27], -0.06, 0.34),
     ],
     confounders: [
