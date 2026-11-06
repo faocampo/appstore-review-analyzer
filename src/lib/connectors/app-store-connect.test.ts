@@ -128,6 +128,7 @@ describe("fetchAppleReviews", () => {
 
   it("reports provider errors without exposing the response body", async () => {
     vi.stubEnv("APPLE_MAX_PAGES", "invalid");
+    vi.stubEnv("STORE_MAX_RETRIES", "0");
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const fetchMock = vi
       .fn()
@@ -139,5 +140,31 @@ describe("fetchAppleReviews", () => {
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     consoleError.mockRestore();
+  });
+
+  it("stops at the incremental watermark and uses an injected token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        data: [
+          appleReview("new", "2026-10-05T00:00:00Z"),
+          appleReview("at-watermark", "2026-10-01T00:00:00Z"),
+        ],
+        links: { next: "https://example.test/page-2" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchAppleReviews({
+      appId: "123",
+      since: new Date("2026-10-01T00:00:00Z"),
+      accessToken: "tenant-token",
+      maxPages: 3,
+    });
+
+    expect(result.reviews.map((review) => review.id)).toEqual(["new"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      headers: { Authorization: "Bearer tenant-token" },
+    });
   });
 });

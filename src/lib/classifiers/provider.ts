@@ -1,6 +1,8 @@
 import {
+  AD_SUBREASON_DEFINITIONS,
   REASON_DEFINITIONS,
   SENTIMENT_LABELS,
+  type AdSubreasonKey,
   type Classification,
   type ClassifierId,
   type ReasonKey,
@@ -10,7 +12,7 @@ import {
 } from "@/lib/types";
 import { clamp } from "@/lib/env";
 
-export const TAXONOMY_VERSION = "reasons-v1";
+export const TAXONOMY_VERSION = "reasons-v2";
 
 export const SENTIMENT_CRITERIA = [
   "Highly negative: strong dissatisfaction, severe complaint, abandonment, harm, or explicit rejection",
@@ -21,6 +23,13 @@ export const SENTIMENT_CRITERIA = [
 ] as const;
 
 export const REASON_KEYS = Object.keys(REASON_DEFINITIONS) as ReasonKey[];
+export const AD_SUBREASON_KEYS = Object.keys(
+  AD_SUBREASON_DEFINITIONS,
+) as AdSubreasonKey[];
+
+export function isAdSubreason(value: string): value is AdSubreasonKey {
+  return Object.prototype.hasOwnProperty.call(AD_SUBREASON_DEFINITIONS, value);
+}
 
 export interface ClassifierInfo {
   provider: ClassifierId;
@@ -86,8 +95,11 @@ export function buildClassification(options: {
   sentimentProbabilities: Record<SentimentLabel, number> | null;
   sentimentConfidence: number;
   primaryReason: ReasonKey;
+  secondaryReason?: ReasonKey | null;
+  adSubreason?: AdSubreasonKey | null;
   reasonProbabilities: Record<ReasonKey, number> | null;
   reasonConfidence: number;
+  costUsd?: number | null;
   model?: string;
 }): Classification {
   const weighted = options.sentimentProbabilities
@@ -109,8 +121,18 @@ export function buildClassification(options: {
     sentimentProbabilities: options.sentimentProbabilities,
     sentimentConfidence: clamp(options.sentimentConfidence, 0, 1),
     primaryReason: options.primaryReason,
+    secondaryReason:
+      options.secondaryReason && options.secondaryReason !== options.primaryReason
+        ? options.secondaryReason
+        : null,
+    // Sub-reasons only apply when ads are one of the reasons.
+    adSubreason:
+      options.primaryReason === "ads" || options.secondaryReason === "ads"
+        ? (options.adSubreason ?? "ad_other")
+        : null,
     reasonProbabilities: options.reasonProbabilities,
     reasonConfidence: clamp(options.reasonConfidence, 0, 1),
+    costUsd: options.costUsd ?? null,
     provider: options.info.provider,
     model: options.model ?? options.info.model,
     promptVersion: options.info.promptVersion,

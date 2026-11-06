@@ -1,8 +1,11 @@
 import type { ClassifierInfo } from "@/lib/classifiers/provider";
 import { PublicError } from "@/lib/errors";
 import {
+  AD_SUBREASON_DEFINITIONS,
   REASON_DEFINITIONS,
   SENTIMENT_LABELS,
+  type AdSubreasonKey,
+  type AdSubreasonSummary,
   type AnalysisResult,
   type AnalyzedReview,
   type PeriodMembership,
@@ -49,6 +52,27 @@ function summarizeReasons(
     }))
     .sort((left, right) => right.count - left.count)
     .slice(0, 5);
+}
+
+function summarizeAdSubreasons(reviews: AnalyzedReview[]): AdSubreasonSummary[] {
+  const counts = new Map<AdSubreasonKey, number>();
+  let total = 0;
+  for (const review of reviews) {
+    const subreason = review.analysis.adSubreason;
+    if (!subreason || sentimentGroup(review.analysis.sentimentLabel) !== "negative") {
+      continue;
+    }
+    total += 1;
+    counts.set(subreason, (counts.get(subreason) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([subreason, count]) => ({
+      subreason,
+      label: AD_SUBREASON_DEFINITIONS[subreason],
+      count,
+      share: count / total,
+    }))
+    .sort((left, right) => right.count - left.count);
 }
 
 function periodMembership(reviews: AnalyzedReview[]): PeriodMembership {
@@ -156,6 +180,7 @@ export function aggregateReviews(options: {
       neutral: summarizeReasons(inPeriod, "neutral"),
       positive: summarizeReasons(inPeriod, "positive"),
     },
+    adSubreasons: summarizeAdSubreasons(inPeriod),
     reviews: inPeriod.slice(0, options.lastN),
     notices: [
       "Average rating is calculated from written reviews only; star-only ratings require a separate store ratings export.",

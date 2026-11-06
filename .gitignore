@@ -80,3 +80,6 @@ __pycache__
 *.o
 *.obj
 *.pdb
+
+# server build
+/dist/

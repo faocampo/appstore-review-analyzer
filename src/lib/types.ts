@@ -42,6 +42,23 @@ export const REASON_DEFINITIONS = {
 
 export type ReasonKey = keyof typeof REASON_DEFINITIONS;
 
+/**
+ * Taxonomy v2: what kind of ad complaint a review makes. Only set when the
+ * primary or secondary reason is `ads`. These map to levers Loomit controls
+ * (frequency, formats, rewarded delivery, ad quality).
+ */
+export const AD_SUBREASON_DEFINITIONS = {
+  ad_frequency: "Too many or too frequent ads",
+  ad_intrusive: "Intrusive or hard-to-close ads",
+  ad_inappropriate: "Inappropriate or offensive ad content",
+  ad_audio: "Ads with unexpected sound",
+  ad_reward_failure: "Rewarded ad did not grant the reward",
+  ad_breaks_app: "Ads that crash, freeze or break the app",
+  ad_other: "Other ad complaint",
+} as const;
+
+export type AdSubreasonKey = keyof typeof AD_SUBREASON_DEFINITIONS;
+
 export interface Review {
   id: string;
   store: Store;
@@ -71,8 +88,14 @@ export interface Classification {
   sentimentProbabilities: Record<SentimentLabel, number> | null;
   sentimentConfidence: number;
   primaryReason: ReasonKey;
+  /** Taxonomy v2: a second reason when the review clearly has two, else null. */
+  secondaryReason: ReasonKey | null;
+  /** Taxonomy v2: kind of ad complaint when a reason is `ads`, else null. */
+  adSubreason: AdSubreasonKey | null;
   reasonProbabilities: Record<ReasonKey, number> | null;
   reasonConfidence: number;
+  /** Provider-reported cost attributed to this review, when known. */
+  costUsd: number | null;
   provider: ClassifierId;
   model: string;
   promptVersion: string;
@@ -121,6 +144,13 @@ export interface ReasonSummary {
   share: number;
 }
 
+export interface AdSubreasonSummary {
+  subreason: AdSubreasonKey;
+  label: string;
+  count: number;
+  share: number;
+}
+
 export interface SentimentDistributionItem {
   label: SentimentLabel;
   count: number;
@@ -156,6 +186,8 @@ export interface AnalysisResult {
   coverage: SourceCoverage[];
   sentimentDistribution: SentimentDistributionItem[];
   reasons: Record<SentimentGroup, ReasonSummary[]>;
+  /** Ad complaint breakdown among negative reviews that mention ads. */
+  adSubreasons: AdSubreasonSummary[];
   reviews: AnalyzedReview[];
   notices: string[];
 }

@@ -77,3 +77,30 @@ describe("classifyMock", () => {
     expect(outcomes.every((outcome) => outcome.ok)).toBe(true);
   });
 });
+
+describe("mock taxonomy v2", () => {
+  it.each([
+    ["I watched the ad but didn't get the reward", "ad_reward_failure"],
+    ["The ad has loud sound", "ad_audio"],
+    ["Ads after every level", "ad_frequency"],
+    ["Ads are fine I guess, ads", "ad_other"],
+  ])("assigns ad sub-reasons: %s", (body, expected) => {
+    const result = classifyMock(review(1, "", body));
+    expect(result.adSubreason).toBe(expected);
+  });
+
+  it("returns a secondary reason only when a second reason matches", () => {
+    expect(classifyMock(review(1, "", "Ads everywhere and it is slow")).secondaryReason).not.toBeNull();
+    expect(classifyMock(review(5, "", "Nothing to add")).secondaryReason).toBeNull();
+    expect(classifyMock(review(5, "", "Nothing to add")).adSubreason).toBeNull();
+  });
+});
+
+describe("mock whole-word matching", () => {
+  it("does not match keywords inside other words and understands ES/PT", () => {
+    expect(classifyMock(review(1, "", "Demasiados anuncios en cada nivel")).primaryReason).toBe("ads");
+    expect(classifyMock(review(1, "", "Muitos anúncios, trava o jogo")).adSubreason).not.toBeNull();
+    expect(classifyMock(review(3, "", "Bad downloads and loads")).primaryReason).not.toBe("ads");
+    expect(classifyMock(review(1, "", "It freezes constantly")).secondaryReason).not.toBe("pricing_value");
+  });
+});

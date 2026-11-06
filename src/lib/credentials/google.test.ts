@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ANDROID_PUBLISHER_SCOPE, getGooglePlayAccessToken, resetGoogleAuthCache } from "@/lib/credentials/google";
+import { ANDROID_PUBLISHER_SCOPE, getGooglePlayAccessToken, mintGoogleAccessToken, resetGoogleAuthCache } from "@/lib/credentials/google";
 
 const getAccessToken = vi.fn();
 const GoogleAuth = vi.fn();
@@ -70,5 +70,18 @@ describe("getGooglePlayAccessToken", () => {
 
     vi.stubEnv("GOOGLE_PLAY_ACCESS_TOKEN", "google_play_access_token_placeholder");
     await expect(getGooglePlayAccessToken()).rejects.toThrow("no credentials are configured");
+  });
+
+  it("mints per-tenant tokens and maps failures to safe errors", async () => {
+    getAccessToken.mockResolvedValueOnce({ token: "tenant-token" });
+    await expect(mintGoogleAccessToken(JSON.stringify(serviceAccount))).resolves.toBe("tenant-token");
+    expect(GoogleAuth).toHaveBeenLastCalledWith({ credentials: serviceAccount, scopes: [ANDROID_PUBLISHER_SCOPE] });
+
+    await expect(mintGoogleAccessToken("{bad")).rejects.toThrow("not valid JSON");
+
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    getAccessToken.mockRejectedValueOnce(new Error("invalid_grant"));
+    await expect(mintGoogleAccessToken(JSON.stringify(serviceAccount))).rejects.toThrow("Google rejected");
+    consoleError.mockRestore();
   });
 });

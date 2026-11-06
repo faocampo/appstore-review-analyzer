@@ -69,6 +69,27 @@ export async function getAppStoreConnectToken(
   );
 }
 
+/** Signs a short-lived App Store Connect JWT from a tenant's API key. */
+export async function signAppStoreConnectToken(
+  credentials: { issuerId: string; keyId: string; privateKey: string },
+  now: () => number = Date.now,
+): Promise<string> {
+  let key: CryptoKey;
+  try {
+    key = await importPKCS8(privateKeyPem(credentials.privateKey), "ES256");
+  } catch {
+    throw new PublicError("The App Store Connect private key is not a valid .p8 ES256 key.", 400);
+  }
+  const issuedAt = Math.floor(now() / 1000);
+  return new SignJWT({})
+    .setProtectedHeader({ alg: "ES256", kid: credentials.keyId, typ: "JWT" })
+    .setIssuer(credentials.issuerId)
+    .setIssuedAt(issuedAt)
+    .setExpirationTime(issuedAt + TOKEN_TTL_SECONDS)
+    .setAudience("appstoreconnect-v1")
+    .sign(key);
+}
+
 export function resetAppleTokenCache(): void {
   cached = undefined;
 }

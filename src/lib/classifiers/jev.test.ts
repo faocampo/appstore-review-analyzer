@@ -75,7 +75,10 @@ describe("Jev classifier", () => {
       primaryReason: "praise_general",
       provider: "jev",
       model: "jev-1.13.0",
-      taxonomyVersion: "reasons-v1",
+      taxonomyVersion: "reasons-v2",
+      promptVersion: "jev-questions-v2",
+      secondaryReason: null,
+      adSubreason: null,
     });
     expect(result.sentimentExpectedValue).toBeCloseTo(3.83);
     const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
@@ -207,5 +210,48 @@ describe("Jev classifier", () => {
       error: "TypeSafe System One returned HTTP 400.",
     });
     consoleError.mockRestore();
+  });
+
+  it("maps the ad sub-reason answer and ignores 'none'", async () => {
+    const withSubreason = (choice: string) => {
+      const answer = jevAnswer({ choice: "ads", score: 0.5 });
+      return Response.json({
+        ...answer,
+        answers: { ...answer.answers, ad_subreason: { choice } },
+      });
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(withSubreason("ad_reward_failure"))
+        .mockResolvedValueOnce(withSubreason("none")),
+    );
+
+    expect((await classifyWithJev(review)).adSubreason).toBe("ad_reward_failure");
+    expect((await classifyWithJev(review)).adSubreason).toBe("ad_other");
+  });
+});
+
+describe("Jev network resilience", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("retries network errors and reports a safe error after the budget", async () => {
+    vi.stubEnv("TYPESAFE_API_KEY", "test-key");
+    vi.stubEnv("CLASSIFIER_RETRY_BASE_MS", "0");
+    vi.stubEnv("CLASSIFIER_MAX_RETRIES", "1");
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(Response.json(jevAnswer({})));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(classifyWithJev(review)).resolves.toMatchObject({ provider: "jev" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+    await expect(classifyWithJev(review)).rejects.toThrow("TypeSafe System One request failed: fetch failed");
   });
 });

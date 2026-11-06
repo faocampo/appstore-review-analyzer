@@ -141,6 +141,7 @@ describe("fetchGooglePlayReviews", () => {
   });
 
   it("reports provider errors without exposing the response body", async () => {
+    vi.stubEnv("STORE_MAX_RETRIES", "0");
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.stubGlobal(
       "fetch",
@@ -160,5 +161,32 @@ describe("fetchGooglePlayReviews", () => {
     expect(error.message).not.toContain("secret detail");
     expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("secret detail"));
     consoleError.mockRestore();
+  });
+
+  it("stops at the incremental watermark with an injected token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        reviews: [
+          googleReview({ id: "new", text: "New", seconds: 1789920000 }),
+          googleReview({ id: "old", text: "Old", seconds: 1789000000 }),
+        ],
+        tokenPagination: { nextPageToken: "more" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchGooglePlayReviews({
+      packageName: "com.example.app",
+      accessToken: "tenant-token",
+      stopAt: new Date(1789500000 * 1000),
+      maxPages: 5,
+    });
+
+    expect(result.reviews.map((review) => review.id)).toEqual(["new"]);
+    expect(result.coverage.truncated).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      headers: { Authorization: "Bearer tenant-token" },
+    });
   });
 });

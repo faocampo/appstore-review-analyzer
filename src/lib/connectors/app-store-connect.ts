@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getAppStoreConnectToken } from "@/lib/credentials/apple";
 import { envInteger } from "@/lib/env";
 import { upstreamError } from "@/lib/errors";
+import { fetchWithRetry } from "@/lib/connectors/http";
 import type { ConnectorResult } from "@/lib/connectors/types";
 import type { Review } from "@/lib/types";
 
@@ -33,12 +34,20 @@ const appleResponseSchema = z.object({
 export async function fetchAppleReviews(options: {
   appId: string;
   startDate?: string;
+  /** Incremental sync watermark; takes precedence over startDate. */
+  since?: Date;
+  /** Per-tenant token; defaults to the environment credentials. */
+  accessToken?: string;
+  maxPages?: number;
 }): Promise<ConnectorResult> {
-  const accessToken = await getAppStoreConnectToken();
-  const maxPages = envInteger("APPLE_MAX_PAGES", 10, { min: 1, max: 50 });
-  const since = options.startDate
-    ? new Date(`${options.startDate}T00:00:00.000Z`).getTime()
-    : undefined;
+  const accessToken = options.accessToken ?? (await getAppStoreConnectToken());
+  const maxPages =
+    options.maxPages ?? envInteger("APPLE_MAX_PAGES", 10, { min: 1, max: 50 });
+  const since = options.since
+    ? options.since.getTime()
+    : options.startDate
+      ? new Date(`${options.startDate}T00:00:00.000Z`).getTime()
+      : undefined;
 
   const reviews: Review[] = [];
   let nextUrl: string | undefined =
@@ -47,7 +56,7 @@ export async function fetchAppleReviews(options: {
   let reachedStart = false;
 
   while (pagesFetched < maxPages && nextUrl && !reachedStart) {
-    const response = await fetch(nextUrl, {
+    const response = await fetchWithRetry(nextUrl, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: "application/json",
@@ -61,7 +70,11 @@ export async function fetchAppleReviews(options: {
     pagesFetched += 1;
     for (const item of payload.data) {
       const createdAt = new Date(item.attributes.createdDate);
-      if (since !== undefined && createdAt.getTime() < since) {
+      // Strictly older than the start date, or at/before the watermark.
+      if (
+        since !== undefined &&
+        (options.since ? createdAt.getTime() <= since : createdAt.getTime() < since)
+      ) {
         reachedStart = true;
         continue;
       }

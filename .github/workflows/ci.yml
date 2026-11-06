@@ -17,7 +17,21 @@ jobs:
   verify:
     name: Lint, typecheck, test, build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -45,5 +59,28 @@ jobs:
       - name: Test with coverage gate (90%)
         run: npm run test:coverage
 
-      - name: Build
+      - name: Build web
         run: npm run build
+
+      - name: Build server
+        run: npm run build:server
+
+      - name: Smoke-run migrations, API and worker
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          AUTH_MODE: dev
+          DEV_JWT_SECRET: ci-only-secret-ci-only-secret-ci-only
+          SECRET_STORE: database
+          SECRETS_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          CLASSIFIER_PROVIDER: mock
+        run: |
+          node dist/server/migrate.js
+          node dist/server/api.js & API_PID=$!
+          node dist/server/worker.js & WORKER_PID=$!
+          for i in $(seq 1 30); do
+            curl -sf localhost:8080/readyz && curl -sf localhost:9464/readyz && break
+            sleep 1
+          done
+          curl -sf localhost:8080/readyz
+          curl -sf localhost:9464/metrics | grep -q reviewsignal_
+          kill $API_PID $WORKER_PID

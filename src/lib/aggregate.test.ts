@@ -67,10 +67,13 @@ describe("aggregateReviews", () => {
     expect(result.classifier).toEqual({
       provider: "mock",
       model: "mock-rules-v1",
-      promptVersion: "rules-v1",
-      taxonomyVersion: "reasons-v1",
+      promptVersion: "rules-v2",
+      taxonomyVersion: "reasons-v2",
     });
     expect(result.coverage).toEqual([]);
+    expect(result.adSubreasons).toEqual([
+      expect.objectContaining({ subreason: "ad_frequency", count: 1, share: 1 }),
+    ]);
   });
 
   it("labels last-modified and mixed period membership and estimators", () => {

@@ -25,4 +25,18 @@ describe("classifier selection", () => {
     vi.stubEnv("CLASSIFIER_PROVIDER", "gpt");
     expect(() => resolveClassifierId()).toThrow('Unknown CLASSIFIER_PROVIDER "gpt"');
   });
+
+  it("wraps the primary with a fallback provider when configured", () => {
+    vi.stubEnv("CLASSIFIER_PROVIDER", "openrouter");
+    vi.stubEnv("CLASSIFIER_FALLBACK_PROVIDER", "jev");
+    const classifier = getClassifier();
+    expect(classifier.info.provider).toBe("openrouter");
+    expect(classifier).toHaveProperty("circuitOpenUntil", 0);
+
+    vi.stubEnv("CLASSIFIER_FALLBACK_PROVIDER", "openrouter");
+    expect(getClassifier()).not.toHaveProperty("circuitOpenUntil");
+
+    vi.stubEnv("CLASSIFIER_FALLBACK_PROVIDER", "nope");
+    expect(() => getClassifier()).toThrow('Unknown CLASSIFIER_FALLBACK_PROVIDER "nope"');
+  });
 });

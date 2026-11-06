@@ -72,6 +72,30 @@ export async function getGooglePlayAccessToken(): Promise<string> {
   );
 }
 
+/** Mints an Android Publisher token from a tenant's service-account JSON. */
+export async function mintGoogleAccessToken(
+  serviceAccountJson: string,
+  scopes: string[] = [ANDROID_PUBLISHER_SCOPE],
+): Promise<string> {
+  let credentials: Record<string, unknown>;
+  try {
+    credentials = JSON.parse(serviceAccountJson) as Record<string, unknown>;
+  } catch {
+    throw new PublicError("The Google service-account credentials are not valid JSON.", 400);
+  }
+  try {
+    const client = await new GoogleAuth({ credentials, scopes }).getClient();
+    const { token } = await client.getAccessToken();
+    if (token) return token;
+  } catch (error) {
+    console.error("[reviewsignal] Google token minting failed", error);
+  }
+  throw new PublicError(
+    "Google rejected the service account. Check the key and its Play Console access.",
+    502,
+  );
+}
+
 export function resetGoogleAuthCache(): void {
   cachedAuth = undefined;
 }

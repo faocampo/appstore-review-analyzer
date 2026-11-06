@@ -21,9 +21,10 @@ function review(id: string, body = "Too many ads after every level"): Review {
   };
 }
 
-function completion(results: unknown[], model = "test/model-2026-01") {
+function completion(results: unknown[], model = "test/model-2026-01", cost?: number) {
   return Response.json({
     model,
+    ...(cost === undefined ? {} : { usage: { cost } }),
     choices: [{ message: { content: JSON.stringify({ results }) } }],
   });
 }
@@ -34,6 +35,8 @@ function result(id: string, overrides: Record<string, unknown> = {}) {
     sentiment_score: 1,
     sentiment_confidence: 0.8,
     primary_reason: "ads",
+    secondary_reason: null,
+    ad_subreason: "ad_frequency",
     reason_confidence: 0.9,
     ...overrides,
   };
@@ -54,7 +57,21 @@ describe("OpenRouter classifier", () => {
   it("sends a strict structured-output batch request with private routing", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(completion([result("r0"), result("r1", { sentiment_score: 4, primary_reason: "praise_general" })]));
+      .mockResolvedValue(
+        completion(
+          [
+            result("r0"),
+            result("r1", {
+              sentiment_score: 4,
+              primary_reason: "praise_general",
+              secondary_reason: "ads",
+              ad_subreason: "ad_audio",
+            }),
+          ],
+          "test/model-2026-01",
+          0.004,
+        ),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const provider = createOpenRouterClassifier();
@@ -91,7 +108,9 @@ describe("OpenRouter classifier", () => {
           primaryReason: "ads",
           provider: "openrouter",
           model: "test/model-2026-01",
-          promptVersion: "openrouter-batch-v1",
+          promptVersion: "openrouter-batch-v2",
+          adSubreason: "ad_frequency",
+          secondaryReason: null,
         }),
       },
       {
@@ -99,6 +118,9 @@ describe("OpenRouter classifier", () => {
         classification: expect.objectContaining({
           sentimentLabel: "highly_positive",
           primaryReason: "praise_general",
+          secondaryReason: "ads",
+          adSubreason: "ad_audio",
+          costUsd: 0.002,
         }),
       },
     ]);

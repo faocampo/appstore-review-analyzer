@@ -1,7 +1,7 @@
 import { exportPKCS8, exportSPKI, generateKeyPair, importSPKI, jwtVerify, decodeProtectedHeader } from "jose";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getAppStoreConnectToken, resetAppleTokenCache } from "@/lib/credentials/apple";
+import { getAppStoreConnectToken, resetAppleTokenCache, signAppStoreConnectToken } from "@/lib/credentials/apple";
 
 describe("getAppStoreConnectToken", () => {
   beforeEach(() => resetAppleTokenCache());
@@ -52,5 +52,23 @@ describe("getAppStoreConnectToken", () => {
 
     vi.stubEnv("APPLE_APP_STORE_CONNECT_TOKEN", "apple_app_store_connect_jwt_placeholder");
     await expect(getAppStoreConnectToken()).rejects.toThrow("no credentials are configured");
+  });
+
+  it("signs per-tenant tokens and rejects invalid keys", async () => {
+    const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true });
+    const token = await signAppStoreConnectToken(
+      { issuerId: "tenant-issuer", keyId: "TENANTKEY", privateKey: await exportPKCS8(privateKey) },
+      () => Date.parse("2026-11-06T00:00:00Z"),
+    );
+    const verified = await jwtVerify(token, await importSPKI(await exportSPKI(publicKey), "ES256"), {
+      issuer: "tenant-issuer",
+      audience: "appstoreconnect-v1",
+      currentDate: new Date("2026-11-06T00:01:00Z"),
+    });
+    expect(verified.protectedHeader.kid).toBe("TENANTKEY");
+
+    await expect(
+      signAppStoreConnectToken({ issuerId: "i", keyId: "k", privateKey: "not a key" }),
+    ).rejects.toThrow("not a valid .p8");
   });
 });

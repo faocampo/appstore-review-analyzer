@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getGooglePlayAccessToken } from "@/lib/credentials/google";
 import { envInteger } from "@/lib/env";
 import { upstreamError } from "@/lib/errors";
+import { fetchWithRetry } from "@/lib/connectors/http";
 import type { ConnectorResult } from "@/lib/connectors/types";
 import type { Review } from "@/lib/types";
 
@@ -54,9 +55,19 @@ export async function fetchGooglePlayReviews(options: {
   packageName: string;
   startDate?: string;
   now?: number;
+  /** Per-tenant token; defaults to the environment credentials. */
+  accessToken?: string;
+  /**
+   * Incremental sync watermark: pagination stops once a page contains reviews
+   * modified at or before this instant (the API returns newest first).
+   */
+  stopAt?: Date;
+  maxPages?: number;
 }): Promise<ConnectorResult> {
-  const accessToken = await getGooglePlayAccessToken();
-  const maxPages = envInteger("GOOGLE_PLAY_MAX_PAGES", 10, { min: 1, max: 50 });
+  const accessToken = options.accessToken ?? (await getGooglePlayAccessToken());
+  const maxPages =
+    options.maxPages ?? envInteger("GOOGLE_PLAY_MAX_PAGES", 10, { min: 1, max: 50 });
+  let reachedWatermark = false;
 
   const reviews: Review[] = [];
   let pageToken: string | undefined;
@@ -69,7 +80,7 @@ export async function fetchGooglePlayReviews(options: {
     url.searchParams.set("maxResults", "100");
     if (pageToken) url.searchParams.set("token", pageToken);
 
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: "application/json",
@@ -88,6 +99,10 @@ export async function fetchGooglePlayReviews(options: {
       if (!comment) continue;
 
       const lastModified = googleTimestamp(comment.lastModified);
+      if (options.stopAt && new Date(lastModified) <= options.stopAt) {
+        reachedWatermark = true;
+        continue;
+      }
       reviews.push({
         id: item.reviewId,
         store: "google_play",
@@ -105,10 +120,10 @@ export async function fetchGooglePlayReviews(options: {
     }
 
     pageToken = payload.tokenPagination?.nextPageToken;
-    if (!pageToken) break;
+    if (!pageToken || reachedWatermark) break;
   }
 
-  const truncated = Boolean(pageToken);
+  const truncated = Boolean(pageToken) && !reachedWatermark;
   const windowStart =
     (options.now ?? Date.now()) - GOOGLE_REVIEW_API_WINDOW_DAYS * 86_400_000;
   const beforeWindow = options.startDate

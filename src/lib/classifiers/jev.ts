@@ -7,6 +7,7 @@ import {
   buildClassification,
   delay,
   errorMessage,
+  isAdSubreason,
   isReason,
   validDistribution,
   type ClassificationOutcome,
@@ -16,6 +17,7 @@ import {
 import { envInteger, isConfigured } from "@/lib/env";
 import { PublicError, upstreamError } from "@/lib/errors";
 import {
+  AD_SUBREASON_DEFINITIONS,
   REASON_DEFINITIONS,
   SENTIMENT_LABELS,
   type Classification,
@@ -25,7 +27,7 @@ import {
 } from "@/lib/types";
 
 const JEV_URL = "https://api.typesafe.ai/v1/systemone";
-const PROMPT_VERSION = "jev-questions-v1";
+const PROMPT_VERSION = "jev-questions-v2";
 
 const probabilitySchema = z.union([
   z.array(z.number()),
@@ -45,6 +47,7 @@ const jevResponseSchema = z.object({
       probabilities: probabilitySchema,
       confidence: z.number().min(0).max(1),
     }),
+    ad_subreason: z.object({ choice: z.string() }).optional(),
   }),
 });
 
@@ -125,6 +128,12 @@ function requestBody(review: Review, model: string): string {
         instructions: "What is the main reason for the review?",
         criteria: REASON_DEFINITIONS,
       },
+      ad_subreason: {
+        type: "choice",
+        instructions:
+          "If the review complains about ads, what kind of ad complaint is it?",
+        criteria: { ...AD_SUBREASON_DEFINITIONS, none: "The review is not about ads" },
+      },
     },
   });
 }
@@ -159,17 +168,27 @@ export async function classifyWithJev(review: Review): Promise<Classification> {
   });
 
   for (let attempt = 0; ; attempt += 1) {
-    const response = await fetch(JEV_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: requestBody(review, info.model),
-      cache: "no-store",
-      signal: AbortSignal.timeout(timeout),
-    });
+    let response: Response;
+    try {
+      response = await fetch(JEV_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: requestBody(review, info.model),
+        cache: "no-store",
+        signal: AbortSignal.timeout(timeout),
+      });
+    } catch (error) {
+      // Network errors and timeouts are transient: retry within budget.
+      if (attempt < maxRetries) {
+        await delay(baseDelay * 2 ** attempt);
+        continue;
+      }
+      throw new PublicError(`TypeSafe System One request failed: ${errorMessage(error)}`, 502);
+    }
 
     if (!response.ok) {
       if (isRetryable(response.status) && attempt < maxRetries) {
@@ -182,6 +201,7 @@ export async function classifyWithJev(review: Review): Promise<Classification> {
 
     const payload = jevResponseSchema.parse(await response.json());
     const selectedReason = payload.answers.primary_reason.choice;
+    const selectedSubreason = payload.answers.ad_subreason?.choice ?? "";
 
     return buildClassification({
       info,
@@ -192,6 +212,9 @@ export async function classifyWithJev(review: Review): Promise<Classification> {
       ),
       sentimentConfidence: payload.answers.sentiment.confidence,
       primaryReason: isReason(selectedReason) ? selectedReason : "other_unclear",
+      // Jev answers one reason per question; no secondary reason.
+      secondaryReason: null,
+      adSubreason: isAdSubreason(selectedSubreason) ? selectedSubreason : null,
       reasonProbabilities: reasonProbabilities(
         payload.answers.primary_reason.probabilities,
       ),
