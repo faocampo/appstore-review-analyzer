@@ -24,15 +24,13 @@ which depend on people, data or systems outside this repository.
 - **Ingestion:** the end-to-end pipeline has been exercised with mocked store APIs. That covers backfill, incremental sync from the watermark, the Google window, truncation, failures and rate limits, CSV and Play reports (UTF-16), classification, budget stop and rollups.
 - **Guardrails:** guardrail statistics match reference values. Evaluation and alert delivery have been exercised end to end, including the HMAC signature and de-duplication.
 - **Processes:** the built processes (`migrate`, `api`, `worker`) start against Postgres, report ready, and serve authenticated requests.
+- **CI on the PR (GitHub Actions):** lint, typecheck, tests with the coverage gate against a Postgres service, web and server builds, process smoke run, Helm lint and render for staging and production, `promtool`, alert-rule sync, Docker image build and CodeQL all pass.
 - **Performance:** panel endpoints meet the p95 target on 54,000 reviews. See [load test results](operations/load-test-results.md).
 
 ## Not verified
 
 - **External APIs:** no call has been made to the real Google Play, App Store Connect, OpenRouter or TypeSafe APIs. Their contracts are covered only by tests with recorded shapes and mocked HTTP.
-- **Deployment artifacts:**
-  - The image has not been built: there is no Docker daemon here, so CI builds it.
-  - The chart was rendered only with a local stand-in for `helm template`; CI runs real `helm lint` and `helm template`.
-  - Alert rules have not been checked by `promtool`; CI does that.
+- **Deployment artifacts:** the image has not been deployed anywhere. It builds, and real `helm lint`/`helm template` (both overlays) and `promtool check rules` pass in CI on GitHub Actions; there is no staging run yet.
 - **Classification quality:** the only evaluation numbers come from the synthetic smoke dataset with the mock classifier. They say nothing about quality.
 
 ## Decisions waiting on people
